@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 output/*.md
 *.doc
+
+# 本地参考文件（不上传）
+5-论文格式（硕士）.pdf
+基于区块链预言机*.pdf
+学术写作规范.md
+docs/archive/

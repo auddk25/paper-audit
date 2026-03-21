@@ -1,6 +1,6 @@
 # Paper Audit - 论文审计工具
 
-东北大学硕士学位论文审计工具，作为 Claude Code Skill 运行。自动检查格式规范、内容质量和学术写作风格。
+学位论文审计工具，作为 Claude Code Skill 运行。自动检查格式规范、内容质量和学术写作风格。
 
 ## 功能
 
@@ -29,14 +29,16 @@ paper-audit/
 ├── scripts/
 │   ├── pdf_extractor.py        # PDF 结构提取（章节边界、页码范围）
 │   └── format_checker.py       # 格式规范自动检查 → JSON
+├── examples/
+│   └── sample_spec.yaml        # 格式规范示例（YAML）
 ├── docs/
-│   ├── plans/                  # 设计文档
-│   └── archive/                # 归档旧版文件
+│   └── plans/                  # 设计文档
 ├── output/                     # 审计报告输出
-├── 5-论文格式（硕士）.pdf        # 东北大学格式规范
-├── 学术写作规范.md               # 写作规范（合并最终版）
-└── 基于区块链预言机...pdf        # 写作风格范例
+├── requirements.txt
+└── README.md
 ```
+
+> 用户需自行准备：论文 PDF、学校格式规范文件、写作风格参考文档，放在项目根目录即可。
 
 ## 技术栈
 
@@ -44,26 +46,20 @@ paper-audit/
 - **PyMuPDF** — PDF 布局数据提取（字号、字体、坐标）
 - **Claude Code** — Skill 宿主，负责内容审查和润色
 
-## 环境搭建
+## 快速开始
 
 ```bash
+git clone https://github.com/auddk25/paper-audit.git
+cd paper-audit
 python -m venv .venv
-.venv/Scripts/pip install PyMuPDF
+.venv/Scripts/pip install -r requirements.txt
 ```
 
-## 格式规范
+## 配置格式规范
 
-基于东北大学硕士学位论文排版打印格式：
+复制 `examples/sample_spec.yaml` 到项目根目录，按学校要求修改参数：
 
-- 纸张 A4（210×297mm），版芯 160×247mm
-- 正文小4号宋体（12pt），外文 Times New Roman
-- 标题四级：二号黑体（章）→ 三号黑体（节）→ 四号黑体（款）→ 小四号黑体（项）
-- 图表按章编号（图2.1、表2.1），参考文献顺序编号
-
-## 写作规范
-
-基于通信学报论文《基于区块链预言机的安全高效电力数据共享平台构建方法》风格提取，包含：
-
-- 11节写作约束（铁律、章节结构、词汇表达、量化分级等）
-- 自检清单（全局/章节/实验/表达四维度）
-- 句式速查表
+```bash
+cp examples/sample_spec.yaml format_spec.yaml
+# 编辑 format_spec.yaml 中的字号、页边距等
+```
