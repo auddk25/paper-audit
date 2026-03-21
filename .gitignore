@@ -1,11 +1,24 @@
+# === 论文文件 — 绝对不上传 ===
+*.pdf
+*.doc
+*.docx
+
+# === Python ===
 .venv/
 __pycache__/
 *.pyc
-output/*.md
-*.doc
+*.pyo
 
-# 本地参考文件（不上传）
-5-论文格式（硕士）.pdf
-基于区块链预言机*.pdf
+# === 审计输出 ===
+output/
+
+# === 本地参考文档 ===
 学术写作规范.md
 docs/archive/
+
+# === 编辑器 / 系统 ===
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
