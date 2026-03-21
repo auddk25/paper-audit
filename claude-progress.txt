@@ -1,0 +1,39 @@
+# Paper Audit Tool - Progress
+
+## Status: MVP Complete
+
+## Completed
+- [x] Project scaffolding (git, venv, directories)
+- [x] PDF structure extractor (scripts/pdf_extractor.py)
+- [x] Format checker (scripts/format_checker.py) — NEU thesis rules
+- [x] Claude Code Skill (SKILL.md) — /audit-paper command
+- [x] Academic writing standard (学术写作规范.md) — merged final version
+- [x] GitHub repo connected (https://github.com/auddk25/paper-audit)
+- [x] .gitignore blocks all PDF/DOC/DOCX
+
+## Architecture
+- Python scripts: format checking (PyMuPDF)
+- Claude Code Skill: content review + polishing (Claude itself)
+- Output: Markdown audit report
+
+## Key Files
+- .claude/skills/audit-paper/SKILL.md — skill definition
+- scripts/format_checker.py — format checking (8 check categories)
+- scripts/pdf_extractor.py — PDF structure extraction
+- 学术写作规范.md — writing style rules (local only)
+- 5-论文格式（硕士）.pdf — NEU format spec (local only)
+
+## Format Check Categories
+1. Page size (A4)
+2. Body text font/size (SimSun 12pt)
+3. Chapter heading font/size (SimHei 22pt)
+4. Section heading font/size (SimHei 16pt/14pt)
+5. Figure/table/equation numbering continuity
+6. Reference numbering continuity
+7. Page headers
+8. Page numbers
+
+## Next Steps
+- Test with a real thesis PDF
+- Iterate on format checker rules based on real thesis feedback
+- Add TOC page filtering to avoid false positives from TOC entries
