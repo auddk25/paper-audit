@@ -124,6 +124,8 @@ def check_format(pdf_path: str) -> dict:
     issues.extend(_check_references(pdf_path, structure))
     issues.extend(_check_headers(pdf_path, structure))
     issues.extend(_check_page_numbers(pdf_path, structure))
+    issues.extend(_check_paragraph_last_line(pdf_path, structure))
+    issues.extend(_check_page_bottom_blank(pdf_path, structure))
 
     errors = sum(1 for i in issues if i["severity"] == "error")
     warnings = len(issues) - errors
@@ -970,6 +972,136 @@ def _check_page_numbers(pdf_path: str, structure: dict) -> list[dict]:
             issues.append(_issue(
                 page_idx + 1, "页脚",
                 "页码", "应有页码", "未检测到页码", "warning"
+            ))
+
+    doc.close()
+    return issues
+
+
+# ═══════════════════════════════════════════════════════════════
+# 16. Paragraph Last Line (末行不少于5字)
+# ═══════════════════════════════════════════════════════════════
+
+def _check_paragraph_last_line(pdf_path: str, structure: dict) -> list[dict]:
+    """Check that the last line of each paragraph has at least 5 characters.
+
+    If the last line is too short (<5 chars), suggest condensing the paragraph
+    to avoid a dangling short line (排版术语：孤字/短尾行).
+    """
+    issues = []
+    import fitz
+    doc = fitz.open(pdf_path)
+    start, end = _get_body_page_range(structure)
+
+    MIN_LAST_LINE_CHARS = 5
+
+    for page_idx in range(start - 1, end):
+        page = doc[page_idx]
+        blocks = page.get_text("dict")["blocks"]
+
+        for block in blocks:
+            if "lines" not in block:
+                continue
+
+            # Only check text blocks in body region
+            block_y = block["bbox"][1]
+            if block_y < 60 or block_y > page.rect.height - 50:
+                continue
+
+            lines = block["lines"]
+            if len(lines) < 2:
+                # Single-line blocks are headings or short items, skip
+                continue
+
+            # The last line of a multi-line block is a paragraph ending
+            last_line = lines[-1]
+            prev_line = lines[-2]
+            last_text = "".join(s["text"] for s in last_line["spans"]).strip()
+            prev_text = "".join(s["text"] for s in prev_line["spans"]).strip()
+
+            # Only check if previous line is a full-width line (>20 chars)
+            # to confirm this is a real paragraph, not a list or heading
+            if len(prev_text) < 20:
+                continue
+
+            # Skip if last line looks like a caption, formula, or reference
+            if re.match(r"^(图|表|式|[（(]\d)", last_text):
+                continue
+
+            char_count = len(last_text)
+            if 0 < char_count < MIN_LAST_LINE_CHARS:
+                issues.append(_issue(
+                    page_idx + 1,
+                    f'段落末行 "{last_text}"',
+                    "段落末行字数",
+                    f"末行不少于{MIN_LAST_LINE_CHARS}个字",
+                    f'仅{char_count}字，建议缩减上文使末行更饱满',
+                    "warning"
+                ))
+
+    doc.close()
+    return issues
+
+
+# ═══════════════════════════════════════════════════════════════
+# 17. Page Bottom Blank (页底不超过2行空白)
+# ═══════════════════════════════════════════════════════════════
+
+def _check_page_bottom_blank(pdf_path: str, structure: dict) -> list[dict]:
+    """Check that body pages don't have more than 2 blank lines at the bottom.
+
+    Measures the gap between the last text line and the footer/page bottom.
+    2 blank lines ≈ 2 × 20pt = 40pt. Flag if gap > 60pt (≈3 lines).
+    """
+    issues = []
+    import fitz
+    doc = fitz.open(pdf_path)
+    start, end = _get_body_page_range(structure)
+
+    LINE_HEIGHT_PT = 20.0
+    MAX_BLANK_LINES = 2
+    MAX_GAP_PT = (MAX_BLANK_LINES + 1) * LINE_HEIGHT_PT  # 60pt ≈ 3行
+
+    for page_idx in range(start - 1, end):
+        page = doc[page_idx]
+        blocks = page.get_text("dict")["blocks"]
+        page_height = page.rect.height
+        footer_top = page_height - 50  # footer region starts here
+
+        # Find the y-coordinate of the bottom of the last body text line
+        last_body_y = 0
+        for block in blocks:
+            if "lines" not in block:
+                continue
+            for line in block["lines"]:
+                y_bottom = line["bbox"][3]
+                # Must be in body region (below header, above footer)
+                if 60 < line["bbox"][1] < footer_top:
+                    text = "".join(s["text"] for s in line["spans"]).strip()
+                    if text:
+                        last_body_y = max(last_body_y, y_bottom)
+
+        if last_body_y == 0:
+            continue
+
+        # Gap from last text to footer region
+        gap = footer_top - last_body_y
+        blank_lines = gap / LINE_HEIGHT_PT
+
+        if blank_lines > MAX_BLANK_LINES + 1:
+            # Skip chapter-start pages (they often have extra space after heading)
+            is_chapter_start = any(
+                ch["page"] == page_idx + 1 for ch in structure["chapters"]
+            )
+            if is_chapter_start:
+                continue
+
+            issues.append(_issue(
+                page_idx + 1, "页面底部",
+                "页底空白",
+                f"页底空行不超过{MAX_BLANK_LINES}行",
+                f'底部约{blank_lines:.0f}行空白，建议调整内容填满',
+                "warning"
             ))
 
     doc.close()
