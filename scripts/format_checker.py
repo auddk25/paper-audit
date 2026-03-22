@@ -14,8 +14,13 @@ Checks 15 categories:
   11. Figure/table/equation numbering continuity
   12. Figure caption (below, 五号宋体) & table caption (above, 五号宋体)
   13. Reference numbering + GB/T 7714 format
-  14. Page headers (left+right, 楷体五号)
+  14. Page headers (left+right, 楷体五号, right must match chapter title)
   15. Page numbers
+  16. Paragraph last-line min 5 chars
+  17. Page bottom blank ≤ 2 lines
+  18. Chapter title length ≤ 20 chars
+  19. TOC: entry font sizes (一级小三/其他小四), page numbers (小四),
+      numbering continuity, TOC-vs-body title consistency
 
 Usage:
     python format_checker.py <thesis.pdf>
@@ -126,6 +131,7 @@ def check_format(pdf_path: str) -> dict:
     issues.extend(_check_page_numbers(pdf_path, structure))
     issues.extend(_check_paragraph_last_line(pdf_path, structure))
     issues.extend(_check_page_bottom_blank(pdf_path, structure))
+    issues.extend(_check_toc_page_numbers(pdf_path, structure))
 
     errors = sum(1 for i in issues if i["severity"] == "error")
     warnings = len(issues) - errors
@@ -408,9 +414,11 @@ def _check_english_font(pdf_path: str, structure: dict) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════
 
 def _check_chapter_headings(structure: dict) -> list[dict]:
-    """Check chapter heading font and size."""
+    """Check chapter heading font, size, and title length (≤20 chars)."""
     issues = []
     r = RULES["chapter_heading"]
+    MAX_TITLE_CHARS = 20
+
     for ch in structure["chapters"]:
         if abs(ch["font_size"] - r["size_pt"]) > r["tolerance_pt"]:
             issues.append(_issue(
@@ -423,6 +431,16 @@ def _check_chapter_headings(structure: dict) -> list[dict]:
                 ch["page"], f'第{ch["number"]}章 {ch["title"]}',
                 "章标题字体", "黑体(SimHei)", ch["font_name"], "error"
             ))
+
+        # Title length check
+        title_len = len(ch["title"])
+        if title_len > MAX_TITLE_CHARS:
+            issues.append(_issue(
+                ch["page"], f'第{ch["number"]}章 {ch["title"]}',
+                "章标题长度", f"不超过{MAX_TITLE_CHARS}个字",
+                f'{title_len}个字，建议精简', "warning"
+            ))
+
     return issues
 
 
@@ -906,17 +924,21 @@ def _check_headers(pdf_path: str, structure: dict) -> list[dict]:
                 left_text[:30], "warning"
             ))
 
-        # --- Right header: "第X章 章标题" ---
+        # --- Right header: "第X章 章标题" must match chapter title exactly ---
         right_text = "".join(s["text"].strip() for s in right_spans)
         current_ch = _get_current_chapter(page_idx, chapters)
         if current_ch and right_text:
-            expected_ch_marker = f"第{current_ch['number']}章"
-            if expected_ch_marker not in right_text:
+            expected_right = f"第{current_ch['number']}章{current_ch['title']}"
+            # Normalize: remove all whitespace for comparison
+            right_norm = re.sub(r"\s+", "", right_text)
+            expected_norm = re.sub(r"\s+", "", expected_right)
+            if right_norm != expected_norm:
                 issues.append(_issue(
                     page_idx + 1, "页眉右端",
                     "页眉章节标题",
-                    f"{expected_ch_marker} {current_ch['title'][:15]}",
-                    right_text[:30], "warning"
+                    f"第{current_ch['number']}章 {current_ch['title']}",
+                    right_text[:30] if right_text else "（空）",
+                    "warning"
                 ))
 
         # --- Header font: 楷体 + 五号 ---
@@ -1103,6 +1125,252 @@ def _check_page_bottom_blank(pdf_path: str, structure: dict) -> list[dict]:
                 f'底部约{blank_lines:.0f}行空白，建议调整内容填满',
                 "warning"
             ))
+
+    doc.close()
+    return issues
+
+
+# ═══════════════════════════════════════════════════════════════
+# 19. TOC Checks (目录：字号 + 逻辑结构 + 页码一致性)
+# ═══════════════════════════════════════════════════════════════
+
+def _find_toc_range(doc, structure: dict) -> tuple[int, int] | None:
+    """Find TOC page range (0-indexed, exclusive end). Returns None if not found."""
+    toc_start = None
+    for page_idx in range(min(len(doc), 15)):
+        text = doc[page_idx].get_text()
+        if re.search(r"目\s*录", text):
+            toc_start = page_idx
+            break
+    if toc_start is None:
+        return None
+    toc_end = len(doc)
+    if structure["chapters"]:
+        toc_end = structure["chapters"][0]["page"] - 1  # 1-indexed → exclusive
+    return toc_start, toc_end
+
+
+def _parse_toc_entries(doc, toc_start: int, toc_end: int) -> list[dict]:
+    """Parse TOC lines into structured entries.
+
+    Returns list of dicts: {level, number, title, page_num, font_size, page_idx}
+    """
+    entries = []
+    # Patterns to identify TOC entry types
+    ch_pattern = re.compile(r"第\s*([一二三四五六七八九十\d]+)\s*章\s*(.*)")
+    sec_pattern = re.compile(r"(\d+\.\d+)\s+(.*)")
+    subsec_pattern = re.compile(r"(\d+\.\d+\.\d+)\s+(.*)")
+    # Non-numbered first-level entries (摘要、致谢、参考文献 etc.)
+    special_l1 = re.compile(r"^(摘\s*要|ABSTRACT|Abstract|目\s*录|参考文献|致\s*谢|攻读|附\s*录|插图|缩略)")
+
+    for page_idx in range(toc_start, toc_end):
+        page = doc[page_idx]
+        blocks = page.get_text("dict")["blocks"]
+
+        for block in blocks:
+            if "lines" not in block:
+                continue
+            for line in block["lines"]:
+                spans = line["spans"]
+                if not spans:
+                    continue
+                full_text = "".join(s["text"] for s in spans).strip()
+                if not full_text or len(full_text) < 2:
+                    continue
+
+                # Skip the "目 录" title itself
+                if re.match(r"^目\s*录$", full_text):
+                    continue
+
+                # Get the first text span's font size (for the title part)
+                title_size = spans[0]["size"]
+
+                # Determine entry level
+                level = None
+                number = ""
+                title = full_text
+
+                m_sub = subsec_pattern.match(full_text)
+                m_sec = sec_pattern.match(full_text)
+                m_ch = ch_pattern.match(full_text)
+
+                if m_sub:
+                    level = 3
+                    number = m_sub.group(1)
+                    title = m_sub.group(2).strip()
+                elif m_sec:
+                    level = 2
+                    number = m_sec.group(1)
+                    title = m_sec.group(2).strip()
+                elif m_ch:
+                    level = 1
+                    number = m_ch.group(1)
+                    title = m_ch.group(2).strip()
+                elif special_l1.match(full_text):
+                    level = 1
+                    title = full_text
+
+                if level is None:
+                    continue
+
+                # Extract page number: rightmost numeric/roman span
+                page_num_text = None
+                page_num_size = None
+                for s in reversed(spans):
+                    t = s["text"].strip()
+                    if re.match(r"^\d+$", t) or re.match(r"^[IVXLCDMivxlcdm]+$", t):
+                        # Verify it's on the right side
+                        if s["bbox"][0] > 250:
+                            page_num_text = t
+                            page_num_size = s["size"]
+                            break
+
+                # Strip trailing page number and dots from title
+                title = re.sub(r"[\s.·…]+\d+\s*$", "", title).strip()
+                title = re.sub(r"[\s.·…]+[IVXLCDMivxlcdm]+\s*$", "", title).strip()
+
+                entries.append({
+                    "level": level,
+                    "number": number,
+                    "title": title,
+                    "page_num_text": page_num_text,
+                    "page_num_size": page_num_size,
+                    "title_size": round(title_size, 1),
+                    "page_idx": page_idx,
+                })
+
+    return entries
+
+
+def _check_toc_page_numbers(pdf_path: str, structure: dict) -> list[dict]:
+    """Comprehensive TOC check: font sizes, page number sizes, logical structure.
+
+    Rules:
+      - 一级标题条目：小三 (15pt)
+      - 二级及以下条目：小四 (12pt)
+      - 所有页码（阿拉伯/罗马数字）：小四 (12pt)
+      - 编号连续性：第1章→第2章→...，1.1→1.2→...
+      - 目录条目应与正文标题一致
+    """
+    issues = []
+    import fitz
+    doc = fitz.open(pdf_path)
+
+    toc_range = _find_toc_range(doc, structure)
+    if toc_range is None:
+        doc.close()
+        return issues
+
+    toc_start, toc_end = toc_range
+    entries = _parse_toc_entries(doc, toc_start, toc_end)
+
+    L1_SIZE = 15.0   # 小三
+    L2_SIZE = 12.0   # 小四
+    PAGE_NUM_SIZE = 12.0  # 小四
+    TOLERANCE = 0.5
+
+    # --- A. Font size checks ---
+    for entry in entries:
+        pg = entry["page_idx"] + 1
+
+        # A1. Title font size
+        if entry["level"] == 1:
+            if abs(entry["title_size"] - L1_SIZE) > TOLERANCE:
+                issues.append(_issue(
+                    pg,
+                    f'目录一级标题 "{entry["title"][:20]}"',
+                    "目录一级标题字号",
+                    f"小三号({L1_SIZE}pt)",
+                    f'{entry["title_size"]}pt',
+                    "warning"
+                ))
+        else:
+            if abs(entry["title_size"] - L2_SIZE) > TOLERANCE:
+                level_name = "二级" if entry["level"] == 2 else "三级"
+                issues.append(_issue(
+                    pg,
+                    f'目录{level_name}标题 "{entry["title"][:20]}"',
+                    f"目录{level_name}标题字号",
+                    f"小四号({L2_SIZE}pt)",
+                    f'{entry["title_size"]}pt',
+                    "warning"
+                ))
+
+        # A2. Page number font size — all must be 小四
+        if entry["page_num_size"] is not None:
+            if abs(entry["page_num_size"] - PAGE_NUM_SIZE) > TOLERANCE:
+                issues.append(_issue(
+                    pg,
+                    f'目录页码 "{entry["page_num_text"]}"（{entry["title"][:15]}）',
+                    "目录页码字号",
+                    f"小四号({PAGE_NUM_SIZE}pt)",
+                    f'{entry["page_num_size"]}pt',
+                    "warning"
+                ))
+
+    # --- B. Logical structure: chapter numbering continuity ---
+    chapter_entries = [e for e in entries if e["level"] == 1 and e["number"]]
+    for i, entry in enumerate(chapter_entries):
+        # Convert number to int for sequential check
+        try:
+            from pdf_extractor import _chinese_to_int
+            ch_num = _chinese_to_int(entry["number"])
+        except (ValueError, ImportError):
+            continue
+        expected = i + 1
+        if ch_num != expected:
+            issues.append(_issue(
+                entry["page_idx"] + 1,
+                f'目录第{entry["number"]}章',
+                "目录章编号连续性",
+                f"第{expected}章",
+                f'第{entry["number"]}章',
+                "warning"
+            ))
+
+    # --- C. Section numbering continuity within each chapter ---
+    sec_entries = [e for e in entries if e["level"] == 2 and e["number"]]
+    sec_by_chapter = {}
+    for e in sec_entries:
+        parts = e["number"].split(".")
+        if len(parts) == 2:
+            ch = parts[0]
+            sec_by_chapter.setdefault(ch, []).append(int(parts[1]))
+    for ch, secs in sec_by_chapter.items():
+        for i, expected in enumerate(range(1, max(secs) + 1)):
+            if expected not in secs:
+                issues.append(_issue(
+                    toc_start + 1,
+                    f"目录第{ch}章",
+                    "目录节编号连续性",
+                    f"{ch}.{expected} 应存在",
+                    f"缺失 {ch}.{expected}",
+                    "warning"
+                ))
+
+    # --- D. TOC entries vs actual headings: title consistency ---
+    actual_chapters = {ch["number"]: ch["title"] for ch in structure["chapters"]}
+    for entry in entries:
+        if entry["level"] == 1 and entry["number"]:
+            try:
+                from pdf_extractor import _chinese_to_int
+                ch_num = _chinese_to_int(entry["number"])
+            except (ValueError, ImportError):
+                continue
+            actual_title = actual_chapters.get(ch_num)
+            if actual_title is not None:
+                # Normalize for comparison (strip whitespace)
+                toc_title = re.sub(r"\s+", "", entry["title"])
+                body_title = re.sub(r"\s+", "", actual_title)
+                if toc_title != body_title:
+                    issues.append(_issue(
+                        entry["page_idx"] + 1,
+                        f'目录第{ch_num}章',
+                        "目录与正文标题一致性",
+                        f'正文标题: "{actual_title[:20]}"',
+                        f'目录标题: "{entry["title"][:20]}"',
+                        "warning"
+                    ))
 
     doc.close()
     return issues

@@ -16,6 +16,13 @@ output/
 学术写作规范.md
 docs/archive/
 
+# === 工作流临时文件 ===
+.review-result.md
+.audit-result.md
+.test-result.md
+.implement-progress.md
+.release-notes.md
+
 # === 编辑器 / 系统 ===
 .idea/
 .vscode/
