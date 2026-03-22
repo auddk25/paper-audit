@@ -12,7 +12,7 @@ user_invocable: true
 
 用户提供论文文件路径作为参数。如果没有提供，提示用户输入。
 
-论文和数据文件统一放在 `E:/code/paper-audit/input/` 目录下：
+论文和数据文件统一放在 `./input/` 目录下：
 
 ```
 input/
@@ -26,7 +26,7 @@ input/
 
 ## 参考文档
 
-**唯一权威文档**：`E:/code/paper-audit/学术写作规范.md`
+**唯一权威文档**：`./学术写作规范.md`
 
 此文档包含 LLM 审计依据：
 - 写作风格规范（11节 + 自检清单 + 句式速查表）
@@ -93,19 +93,19 @@ Main agent 全程控制流水线，根据阶段特性决定串行/并行。
 
 ```bash
 # 任务 A: PDF 格式检查
-E:/code/paper-audit/.venv/Scripts/python.exe E:/code/paper-audit/scripts/format_checker.py "<PDF路径>"
+.venv/Scripts/python ./scripts/format_checker.py "<PDF路径>"
 
 # 任务 B: Word 空行检查
-E:/code/paper-audit/.venv/Scripts/python.exe E:/code/paper-audit/scripts/word_checker.py "<DOCX路径>"
+.venv/Scripts/python ./scripts/word_checker.py "<DOCX路径>"
 
 # 任务 C: 交叉引用检查
-E:/code/paper-audit/.venv/Scripts/python.exe E:/code/paper-audit/scripts/cross_ref_checker.py "<PDF路径>"
+.venv/Scripts/python ./scripts/cross_ref_checker.py "<PDF路径>"
 
 # 任务 D: 结构提取
-E:/code/paper-audit/.venv/Scripts/python.exe -u -c "
+.venv/Scripts/python -u -c "
 import sys, io, json
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.path.insert(0, 'E:/code/paper-audit/scripts')
+sys.path.insert(0, 'scripts')
 from pdf_extractor import extract_structure
 print(json.dumps(extract_structure(r'<PDF路径>'), ensure_ascii=False, indent=2))
 "
@@ -119,7 +119,7 @@ print(json.dumps(extract_structure(r'<PDF路径>'), ensure_ascii=False, indent=2
 
 **Main agent 串行执行，不可委派 sub-agent。**
 
-1. 读取 `E:/code/paper-audit/学术写作规范.md`
+1. 读取 `./学术写作规范.md`
 2. 使用 Read 工具快速通读全文 PDF（每次20页，略读提取关键信息）
 3. 生成「论文上下文档案」（保存在 main agent 上下文中，不写文件）：
 
@@ -190,7 +190,7 @@ print(json.dumps(extract_structure(r'<PDF路径>'), ensure_ascii=False, indent=2
 
 > **铁律：分析实验章节时，必须先读取 `input/data/chN/` 下的原始数据文件，再审查论文内容。**
 
-1. 用 Glob 扫描 `E:/code/paper-audit/input/data/ch{章号}/`，列出所有数据文件
+1. 用 Glob 扫描 `./input/data/ch{章号}/`，列出所有数据文件
 2. 用 Read 读取数据文件（CSV/Excel/JSON/TXT），理解原始数据结构
 3. 论文中每个实验数据（吞吐量、延迟、准确率、提升百分比等）：
    - 编写 Python 脚本从原始数据独立计算

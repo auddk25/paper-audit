@@ -1307,26 +1307,68 @@ def _check_toc_page_numbers(pdf_path: str, structure: dict) -> list[dict]:
                     f'{entry["page_num_size"]}pt',
                     "warning"
                 ))
+        else:
+            # Page number missing — should be reported
+            issues.append(_issue(
+                pg,
+                f'目录条目 "{entry["title"][:20]}"',
+                "目录页码缺失",
+                "每条目录应有页码",
+                "未检测到页码",
+                "warning"
+            ))
 
     # --- B. Logical structure: chapter numbering continuity ---
     chapter_entries = [e for e in entries if e["level"] == 1 and e["number"]]
-    for i, entry in enumerate(chapter_entries):
-        # Convert number to int for sequential check
+    ch_nums = []
+    for entry in chapter_entries:
         try:
             from pdf_extractor import _chinese_to_int
-            ch_num = _chinese_to_int(entry["number"])
+            ch_nums.append((_chinese_to_int(entry["number"]), entry))
         except (ValueError, ImportError):
             continue
-        expected = i + 1
-        if ch_num != expected:
+
+    # B1. Check for duplicates
+    seen_nums = {}
+    for num, entry in ch_nums:
+        if num in seen_nums:
             issues.append(_issue(
                 entry["page_idx"] + 1,
                 f'目录第{entry["number"]}章',
-                "目录章编号连续性",
-                f"第{expected}章",
-                f'第{entry["number"]}章',
+                "目录章编号重复",
+                "章编号不应重复",
+                f'第{num}章出现了多次',
                 "warning"
             ))
+        seen_nums[num] = entry
+
+    # B2. Check strictly increasing and sequential from 1
+    sorted_nums = [n for n, _ in ch_nums]
+    for i, num in enumerate(sorted_nums):
+        expected = i + 1
+        if num != expected:
+            entry = ch_nums[i][1]
+            if i > 0 and num <= sorted_nums[i - 1]:
+                # Out of order
+                issues.append(_issue(
+                    entry["page_idx"] + 1,
+                    f'目录第{entry["number"]}章',
+                    "目录章编号乱序",
+                    f"第{expected}章（应递增）",
+                    f'第{num}章',
+                    "warning"
+                ))
+            else:
+                # Gap (skip)
+                issues.append(_issue(
+                    entry["page_idx"] + 1,
+                    f'目录第{entry["number"]}章',
+                    "目录章编号跳号",
+                    f"第{expected}章",
+                    f'第{num}章（跳过了{num - expected}章）',
+                    "warning"
+                ))
+            break  # Only report first discontinuity
 
     # --- C. Section numbering continuity within each chapter ---
     sec_entries = [e for e in entries if e["level"] == 2 and e["number"]]
