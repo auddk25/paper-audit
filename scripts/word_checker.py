@@ -1,4 +1,4 @@
-"""Word (.docx) format checker for NEU master's thesis (27 checks).
+"""Word (.docx) format checker for NEU master's thesis (34 checks).
 
 Checks that are more reliable on Word than PDF:
   1.  Body font (正文宋体12pt)
@@ -28,6 +28,13 @@ Checks that are more reliable on Word than PDF:
   25. Lines per page / chars per line (estimate)
   26. Heading spacing check
   27. Figure/table caption spacing
+  28. Table break properties (跨页重复标题行)
+  29. Caption pair adjacency (中英文题目相邻)
+  30. Mixed punctuation (中文段落英文标点)
+  31. Mixed-width digits (全角数字)
+  32. Caption trailing punctuation (图表题末尾标点)
+  33. Duplicate words (连续重复汉字)
+  34. Bracket mismatch (括号配对)
 
 Usage:
     python word_checker.py <thesis.docx>
@@ -517,7 +524,7 @@ def _build_context(doc):
 
 
 # ═══════════════════════════════════════════════════════════════
-# Check functions (27 checks)
+# Check functions (34 checks)
 # ═══════════════════════════════════════════════════════════════
 
 # ---------- 1. Body font ----------
@@ -1638,6 +1645,299 @@ def _check_caption_spacing(doc, ctx):
     return issues
 
 
+# ---------- 28. Table break properties ----------
+
+def _check_table_break_properties(doc, ctx):
+    """检查表格跨页属性：小表格不应跨页，大表格跨页需重复标题行。"""
+    issues = []
+    ns = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    for i, table in enumerate(doc.tables):
+        rows = len(table.rows)
+        # 检查是否有 tblHeader（重复标题行）
+        first_row = table.rows[0]._tr
+        has_header = first_row.find(f'{ns}trPr/{ns}tblHeader') is not None
+        if rows > 10 and not has_header:
+            issues.append(_issue(0, f"表格{i+1}({rows}行)", "大表格标题行重复",
+                "大表格(>10行)跨页时应设置重复标题行", "未设置重复标题行", "warning"))
+    return issues
+
+
+# ---------- 29. Caption pair adjacency ----------
+
+def _check_caption_pair_adjacency(doc, ctx):
+    """检查中英文图题/表题段落是否相邻（para_index差值=1）。"""
+    issues = []
+
+    # Build English caption lookup: (chap, num) -> para_index
+    fig_en_map = {(chap, num): idx for idx, chap, num, text in ctx["fig_captions_en"]}
+    tab_en_map = {(chap, num): idx for idx, chap, num, text in ctx["tab_captions_en"]}
+
+    for idx, chap, num, text in ctx["fig_captions"]:
+        key = (chap, num)
+        if key in fig_en_map:
+            en_idx = fig_en_map[key]
+            gap = abs(en_idx - idx)
+            if gap != 1:
+                issues.append(_issue(idx, f"图{chap}.{num}", "中英文图题相邻",
+                    "中英文图题段落应紧邻(间距1段)",
+                    f"中文题在段{idx}，英文题在段{en_idx}，间距{gap}段", "warning"))
+
+    for idx, chap, num, text in ctx["tab_captions"]:
+        key = (chap, num)
+        if key in tab_en_map:
+            en_idx = tab_en_map[key]
+            gap = abs(en_idx - idx)
+            if gap != 1:
+                issues.append(_issue(idx, f"表{chap}.{num}", "中英文表题相邻",
+                    "中英文表题段落应紧邻(间距1段)",
+                    f"中文题在段{idx}，英文题在段{en_idx}，间距{gap}段", "warning"))
+
+    return issues
+
+
+# ---------- 30. Mixed punctuation ----------
+
+def _check_mixed_punctuation(doc, ctx):
+    """检查中文语境段落中是否出现英文标点。"""
+    issues = []
+    paragraphs = doc.paragraphs
+
+    # Regex: detect Chinese characters
+    re_has_cn = re.compile(r'[\u4e00-\u9fff]')
+    # Regex: detect if paragraph is mostly English (>70% ASCII)
+    re_ascii = re.compile(r'[a-zA-Z0-9 ]')
+    # Target English punctuation in Chinese context
+    en_puncts = [',', '.', ';', '(', ')', ':']
+    # Exclusion patterns
+    re_decimal = re.compile(r'\d\.\d')
+    re_abbrev = re.compile(r'(?:e\.g\.|i\.e\.|et al\.|etc\.|vs\.|Dr\.|Mr\.|Mrs\.|Prof\.)', re.IGNORECASE)
+    re_formula_num = re.compile(r'\(\d+\.\d+\)')
+    re_file_ext = re.compile(r'\.\w{1,5}(?:\s|$|[,，;；])')
+    re_section_ref = re.compile(r'\d+\.\d+(?:\.\d+)*(?:节|章|小节|式|图|表|步)')
+    # English terms with periods in them (abbreviations, names)
+    re_en_term = re.compile(r'[A-Za-z][A-Za-z0-9]*\.[A-Za-z0-9]')
+    # Citation brackets [1,2,3] or [6,9]
+    re_citation = re.compile(r'\[\d+(?:[,，]\d+)*\]')
+    # English parens around English content: (XXX) where XXX is English
+    re_en_paren = re.compile(r'\([A-Za-z][A-Za-z0-9 ,.\-]*\)')
+
+    # Collect reference para indices for exclusion
+    ref_indices = {idx for idx, _, _ in ctx["references"]}
+
+    for pidx in ctx["body_paras"]:
+        p = paragraphs[pidx]
+        text = p.text.strip()
+        if not text:
+            continue
+        # Skip reference paragraphs
+        if pidx in ref_indices:
+            continue
+        # Skip if no Chinese chars (pure English paragraph)
+        if not re_has_cn.search(text):
+            continue
+        # Skip if paragraph is predominantly English (>70% ASCII chars)
+        ascii_count = len(re_ascii.findall(text))
+        if len(text) > 0 and ascii_count / len(text) > 0.7:
+            continue
+
+        # Remove safe patterns before checking (order matters!)
+        # Section refs first (before decimal eats digits)
+        cleaned = re_section_ref.sub('##', text)
+        cleaned = re_formula_num.sub('##', cleaned)
+        cleaned = re_en_paren.sub('##', cleaned)
+        cleaned = re_citation.sub('##', cleaned)
+        cleaned = re_abbrev.sub('##', cleaned)
+        cleaned = re_en_term.sub('##', cleaned)
+        cleaned = re_decimal.sub('##', cleaned)
+        cleaned = re_file_ext.sub('##', cleaned)
+
+        found = []
+        for punct in en_puncts:
+            if punct in cleaned:
+                found.append(punct)
+
+        if found:
+            sample = text[:50] + ("..." if len(text) > 50 else "")
+            issues.append(_issue(pidx, f"段{pidx}", "中文段落英文标点",
+                "中文语境应使用中文标点",
+                f"发现英文标点 {''.join(found)}，段落: {sample}", "warning"))
+
+    return issues
+
+
+# ---------- 31. Mixed-width digits ----------
+
+def _check_mixed_width_digits(doc, ctx):
+    """检查全角数字出现即报warning。"""
+    issues = []
+    paragraphs = doc.paragraphs
+    re_fullwidth = re.compile(r'[０-９]+')
+
+    for pidx in ctx["body_paras"]:
+        text = paragraphs[pidx].text.strip()
+        if not text:
+            continue
+        matches = re_fullwidth.findall(text)
+        if matches:
+            sample = text[:50] + ("..." if len(text) > 50 else "")
+            issues.append(_issue(pidx, f"段{pidx}", "全角数字",
+                "应使用半角数字0-9",
+                f"发现全角数字 {'、'.join(matches[:3])}，段落: {sample}", "warning"))
+
+    return issues
+
+
+# ---------- 32. Caption trailing punctuation ----------
+
+def _check_caption_trailing_punct(doc, ctx):
+    """检查图题/表题末尾是否有多余标点。"""
+    issues = []
+    paragraphs = doc.paragraphs
+    bad_trailing = re.compile(r'[。.，,；;！!？?]$')
+
+    # Check Chinese figure captions
+    for idx, chap, num, text in ctx["fig_captions"]:
+        text_stripped = text.strip()
+        if text_stripped and bad_trailing.search(text_stripped):
+            issues.append(_issue(idx, f"图{chap}.{num}", "图题末尾标点",
+                "图题末尾不应有句号/逗号等标点",
+                f"末尾字符: '{text_stripped[-1]}'", "warning"))
+
+    # Check English figure captions
+    for idx, chap, num, text in ctx["fig_captions_en"]:
+        text_stripped = text.strip()
+        if text_stripped and bad_trailing.search(text_stripped):
+            issues.append(_issue(idx, f"Fig.{chap}.{num}", "英文图题末尾标点",
+                "图题末尾不应有句号/逗号等标点",
+                f"末尾字符: '{text_stripped[-1]}'", "warning"))
+
+    # Check Chinese table captions
+    for idx, chap, num, text in ctx["tab_captions"]:
+        text_stripped = text.strip()
+        if text_stripped and bad_trailing.search(text_stripped):
+            issues.append(_issue(idx, f"表{chap}.{num}", "表题末尾标点",
+                "表题末尾不应有句号/逗号等标点",
+                f"末尾字符: '{text_stripped[-1]}'", "warning"))
+
+    # Check English table captions
+    for idx, chap, num, text in ctx["tab_captions_en"]:
+        text_stripped = text.strip()
+        if text_stripped and bad_trailing.search(text_stripped):
+            issues.append(_issue(idx, f"Table {chap}.{num}", "英文表题末尾标点",
+                "表题末尾不应有句号/逗号等标点",
+                f"末尾字符: '{text_stripped[-1]}'", "warning"))
+
+    return issues
+
+
+# ---------- 33. Duplicate words ----------
+
+def _check_duplicate_words(doc, ctx):
+    """正则检测连续重复汉字。排除合法叠词和跨词边界误报。"""
+    issues = []
+    paragraphs = doc.paragraphs
+    # Match consecutive identical Chinese characters (2+ repetitions)
+    re_dup = re.compile(r'([\u4e00-\u9fff])\1+')
+    # Legal reduplications (common valid repeated-char words)
+    legal_redupl = {
+        '谢谢', '渐渐', '慢慢', '往往', '常常', '仅仅', '刚刚', '偶偶',
+        '默默', '悄悄', '淡淡', '深深', '轻轻', '静静', '缓缓', '微微',
+        '稍稍', '略略', '纷纷', '频频', '每每', '处处', '时时', '事事',
+        '人人', '天天', '年年', '代代', '层层', '步步', '点点', '斑斑',
+        '种种', '多多', '少少', '大大', '小小', '好好', '早早', '草草',
+        '匆匆', '隐隐', '朦朦', '茫茫', '苍苍', '莽莽', '洋洋', '堂堂',
+        '泱泱', '朗朗', '琅琅', '铮铮', '粼粼', '潺潺', '滚滚', '滔滔',
+        '哈哈', '呵呵', '嘻嘻', '嘿嘿', '啧啧', '咄咄', '喃喃', '念念',
+        '姗姗', '翩翩', '冉冉', '袅袅', '娓娓', '侃侃', '赫赫', '炎炎',
+        '凛凛', '彬彬', '落落', '碌碌', '区区', '芸芸', '济济', '岌岌',
+        '欣欣', '蒸蒸', '勃勃', '蠢蠢', '跃跃', '津津', '源源',
+    }
+    # Common cross-word-boundary patterns where the same character appears
+    # at the end of one word and beginning of the next (e.g. 解密+密钥 → 密密)
+    # We check 2-char context before and after the repeated char
+    cross_boundary_patterns = re.compile(
+        r'(?:解密密钥|加密密钥|加密密文|解密密文|对称密密钥|非对称密密钥'
+        r'|验证证明|验证证据|验证证书|认证证书|凭证证明'
+        r'|提交交易|提交交付|成交交易|撤交交割|期交交割'
+        r'|实验验证|试验验证|检验验证|校验验证'
+        r'|以以太|链以以'
+        r'|线性性质|特性性能|属性性质|弹性性能'
+        r'|方面面临|层面面对|界面面板'
+        r'|据包包含|软件包包括'
+        r'|比较较大|比较较小|比较较高|比较较低'
+        r'|委托托管|信托托管'
+        r'|意义义务|含义义务'
+        r'|字符符号|字符符合'
+        r'|重新新建|更新新增'
+        r'|评估估计|评估估值'
+        r'|决策策略|政策策略'
+        r'|提议议案|建议议题'
+        r'|可见见证|意见见解'
+        r'|人民民主|市民民众'
+        r'|管理理论|处理理由|道理理论|原理理论'
+        r'|研究究竟)'
+    )
+
+    ref_indices = {idx for idx, _, _ in ctx["references"]}
+
+    for pidx in ctx["body_paras"]:
+        text = paragraphs[pidx].text.strip()
+        if not text or pidx in ref_indices:
+            continue
+
+        for m in re_dup.finditer(text):
+            dup_word = m.group(0)
+            if dup_word in legal_redupl:
+                continue
+            # Check cross-word boundary: extract wider context around the match
+            ctx_start = max(0, m.start() - 2)
+            ctx_end = min(len(text), m.end() + 2)
+            context_window = text[ctx_start:ctx_end]
+            if cross_boundary_patterns.search(context_window):
+                continue
+            # Show context around the duplicate
+            start = max(0, m.start() - 5)
+            end = min(len(text), m.end() + 5)
+            context_str = text[start:end]
+            issues.append(_issue(pidx, f"段{pidx}", "连续重复汉字",
+                "避免连续重复汉字（如'的的''了了'）",
+                f"发现'{dup_word}'，上下文: ...{context_str}...", "warning"))
+
+    return issues
+
+
+# ---------- 34. Bracket mismatch ----------
+
+def _check_bracket_mismatch(doc, ctx):
+    """对每段计数括号配对。"""
+    issues = []
+    paragraphs = doc.paragraphs
+    bracket_pairs = [
+        ('(', ')', '半角圆括号'),
+        ('（', '）', '全角圆括号'),
+        ('[', ']', '半角方括号'),
+        ('【', '】', '方头括号'),
+    ]
+
+    ref_indices = {idx for idx, _, _ in ctx["references"]}
+
+    for pidx in ctx["body_paras"]:
+        text = paragraphs[pidx].text.strip()
+        if not text or pidx in ref_indices:
+            continue
+
+        for left, right, name in bracket_pairs:
+            lc = text.count(left)
+            rc = text.count(right)
+            if lc != rc:
+                sample = text[:50] + ("..." if len(text) > 50 else "")
+                issues.append(_issue(pidx, f"段{pidx}", f"{name}不配对",
+                    f"'{left}'与'{right}'数量应相等",
+                    f"'{left}'={lc}个, '{right}'={rc}个，段落: {sample}", "warning"))
+
+    return issues
+
+
 # ═══════════════════════════════════════════════════════════════
 # Main entry point
 # ═══════════════════════════════════════════════════════════════
@@ -1654,7 +1954,7 @@ def check_word(docx_path: str) -> dict:
 
     issues = []
 
-    # Run all 27 checks
+    # Run all 34 checks
     checks = [
         ("正文中文字体", _check_body_font),
         ("正文英文字体", _check_english_font),
@@ -1683,6 +1983,13 @@ def check_word(docx_path: str) -> dict:
         ("行数字数估算", _check_lines_and_chars),
         ("标题间距", _check_heading_spacing),
         ("图表题间距", _check_caption_spacing),
+        ("表格跨页属性", _check_table_break_properties),
+        ("中英文题目相邻", _check_caption_pair_adjacency),
+        ("中文段落英文标点", _check_mixed_punctuation),
+        ("全角数字", _check_mixed_width_digits),
+        ("图表题末尾标点", _check_caption_trailing_punct),
+        ("连续重复汉字", _check_duplicate_words),
+        ("括号配对", _check_bracket_mismatch),
     ]
 
     for name, check_fn in checks:

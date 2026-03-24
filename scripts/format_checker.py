@@ -1,11 +1,15 @@
 """Format checker for master's thesis PDF — spatial checks only.
 
-Checks 5 categories that require PDF coordinate analysis:
+Checks 9 categories that require PDF coordinate analysis:
   1. Page size (A4: 210x297mm)
   2. Body area (版芯 160x247mm)
   3. Caption position (图题在图下方 + 表题在表上方)
   4. Page bottom blank (页底空白 <= 2行)
   5. Annotation vs caption size (图中标注字号 <= 图题字号)
+  6. Image resolution (图片分辨率 >= 150 DPI)
+  7. Equation centering (公式居中)
+  8. Equation number alignment (式号右对齐)
+  9. Table cross-page (表格跨页续表头)
 
 Font/text/numbering checks have been migrated to word_checker.py.
 
@@ -57,6 +61,10 @@ def check_format(pdf_path: str) -> dict:
     issues.extend(_check_caption_position(pdf_path, structure))
     issues.extend(_check_page_bottom_blank(pdf_path, structure))
     issues.extend(_check_annotation_vs_caption_size(pdf_path, structure))
+    issues.extend(_check_image_resolution(pdf_path, structure))
+    issues.extend(_check_equation_centering(pdf_path, structure))
+    issues.extend(_check_equation_number_alignment(pdf_path, structure))
+    issues.extend(_check_table_cross_page(pdf_path, structure))
 
     errors = sum(1 for i in issues if i["severity"] == "error")
     warnings = len(issues) - errors
@@ -463,6 +471,291 @@ def _check_annotation_vs_caption_size(pdf_path: str, structure: dict) -> list[di
                             "图内标注字号",
                             f"不大于图题字号({nearest_caption_size}pt)",
                             f'{span["size"]}pt',
+                            "warning"
+                        ))
+
+    return issues
+
+
+# ===============================================================
+# 6. Image Resolution (图片分辨率 >= 150 DPI)
+# ===============================================================
+
+def _check_image_resolution(pdf_path: str, structure: dict) -> list[dict]:
+    """检查图片分辨率：DPI < 150 报 warning，< 72 报 error。"""
+    issues = []
+    import fitz
+    with fitz.open(pdf_path) as doc:
+        for page_idx in range(len(doc)):
+            page = doc[page_idx]
+            images = page.get_images(full=True)
+            for img_info in images:
+                xref = img_info[0]
+                # 获取图片像素尺寸
+                base_image = doc.extract_image(xref)
+                if not base_image:
+                    continue
+                pix_w = base_image.get("width", 0)
+                pix_h = base_image.get("height", 0)
+                if pix_w == 0 or pix_h == 0:
+                    continue
+                # 获取图片在页面中的渲染尺寸
+                rects = page.get_image_rects(xref)
+                for rect in rects:
+                    render_w_inch = rect.width / 72  # pt to inch
+                    render_h_inch = rect.height / 72
+                    if render_w_inch > 0 and render_h_inch > 0:
+                        dpi_x = pix_w / render_w_inch
+                        dpi_y = pix_h / render_h_inch
+                        dpi = min(dpi_x, dpi_y)
+                        if dpi < 72:
+                            issues.append(_issue(
+                                page_idx + 1, f"图片(xref={xref})",
+                                "图片分辨率", ">=150 DPI",
+                                f"{dpi:.0f} DPI（严重模糊）", "error"))
+                        elif dpi < 150:
+                            issues.append(_issue(
+                                page_idx + 1, f"图片(xref={xref})",
+                                "图片分辨率", ">=150 DPI",
+                                f"{dpi:.0f} DPI", "warning"))
+    return issues
+
+
+# ===============================================================
+# 7. Equation Centering (公式居中)
+# ===============================================================
+
+def _check_equation_centering(pdf_path: str, structure: dict) -> list[dict]:
+    """检查公式是否水平居中：找含 (X.Y) 式号的行，检查公式主体左右边距差。"""
+    issues = []
+    import fitz
+
+    eq_num_re = re.compile(r"\(\d+\.\d+\)")
+    start, end = _get_body_page_range(structure)
+
+    with fitz.open(pdf_path) as doc:
+        for page_idx in range(start - 1, end):
+            page = doc[page_idx]
+            page_width = page.rect.width
+            blocks = page.get_text("dict")["blocks"]
+
+            for block in blocks:
+                if "lines" not in block:
+                    continue
+                for line in block["lines"]:
+                    line_text = "".join(s["text"] for s in line["spans"]).strip()
+                    if not eq_num_re.search(line_text):
+                        continue
+
+                    # 收集非式号部分的 span bbox (公式主体)
+                    formula_spans = []
+                    for span in line["spans"]:
+                        span_text = span["text"].strip()
+                        if not span_text:
+                            continue
+                        if eq_num_re.fullmatch(span_text):
+                            continue  # 跳过式号 span
+                        formula_spans.append(span["bbox"])
+
+                    if not formula_spans:
+                        continue
+
+                    # 排除正文中引用式号的行：
+                    # 独立公式行通常较短且以公式符号为主，
+                    # 正文行含大量中文汉字
+                    non_eq_text = eq_num_re.sub("", line_text).strip()
+                    cjk_count = sum(1 for c in non_eq_text if '\u4e00' <= c <= '\u9fff')
+                    if cjk_count > 6:
+                        continue  # 正文引用式号，跳过
+
+                    # 计算公式主体的 bbox
+                    fx0 = min(s[0] for s in formula_spans)
+                    fx1 = max(s[2] for s in formula_spans)
+
+                    # 检查公式主体中心是否接近页面中心
+                    formula_center = (fx0 + fx1) / 2
+                    page_center = page_width / 2
+                    center_offset = abs(formula_center - page_center)
+
+                    if center_offset > 30:
+                        issues.append(_issue(
+                            page_idx + 1,
+                            f'公式行 "{line_text[:30]}"',
+                            "公式居中", "公式主体水平居中",
+                            f"偏离中心 {center_offset:.0f}pt",
+                            "warning"
+                        ))
+
+    return issues
+
+
+# ===============================================================
+# 8. Equation Number Alignment (式号右对齐)
+# ===============================================================
+
+def _check_equation_number_alignment(pdf_path: str, structure: dict) -> list[dict]:
+    """检查式号 (X.Y) 是否右对齐：式号右边界应接近页面右边界。"""
+    issues = []
+    import fitz
+
+    eq_num_re = re.compile(r"\(\d+\.\d+\)")
+    start, end = _get_body_page_range(structure)
+
+    with fitz.open(pdf_path) as doc:
+        for page_idx in range(start - 1, end):
+            page = doc[page_idx]
+            page_width = page.rect.width
+            blocks = page.get_text("dict")["blocks"]
+
+            for block in blocks:
+                if "lines" not in block:
+                    continue
+                for line in block["lines"]:
+                    line_text = "".join(s["text"] for s in line["spans"]).strip()
+                    if not eq_num_re.search(line_text):
+                        continue
+
+                    # 排除正文中引用式号的行（独立公式行汉字很少）
+                    non_eq_text = eq_num_re.sub("", line_text).strip()
+                    cjk_count = sum(1 for c in non_eq_text if '\u4e00' <= c <= '\u9fff')
+                    if cjk_count > 6:
+                        continue
+
+                    # 找到式号 span 的右边界
+                    eq_num_x1 = None
+                    eq_num_text = None
+                    for span in line["spans"]:
+                        span_text = span["text"].strip()
+                        if eq_num_re.search(span_text):
+                            eq_num_x1 = span["bbox"][2]
+                            eq_num_text = span_text
+
+                    if eq_num_x1 is None:
+                        continue
+
+                    # 检查式号右边界是否接近页面右边界
+                    # 85pt ≈ 30mm，对应正常右边距位置
+                    gap = page_width - eq_num_x1
+                    if gap > 85:
+                        issues.append(_issue(
+                            page_idx + 1,
+                            f'式号 "{eq_num_text}"',
+                            "式号右对齐",
+                            "式号应靠近右边界（距右 <85pt）",
+                            f"距右边界 {gap:.0f}pt",
+                            "warning"
+                        ))
+
+    return issues
+
+
+# ===============================================================
+# 9. Table Cross-Page (表格跨页续表头)
+# ===============================================================
+
+def _check_table_cross_page(pdf_path: str, structure: dict) -> list[dict]:
+    """检查表格跨页时是否有续表头。
+
+    找所有表题行（正则 ^表\\s*\\d+），对每个表题所在页 P，
+    检查 P 页底部和 P+1 页顶部是否都有表格相关文本。
+    如果跨页了，检查 P+1 页顶部是否有表头重复。
+    """
+    issues = []
+    import fitz
+
+    table_caption_re = re.compile(r"^表\s*\d+")
+    start, end = _get_body_page_range(structure)
+
+    with fitz.open(pdf_path) as doc:
+        total_pages = len(doc)
+
+        for page_idx in range(start - 1, end):
+            page = doc[page_idx]
+            blocks = page.get_text("dict")["blocks"]
+            page_height = page.rect.height
+            footer_top = page_height - 50
+
+            # 收集本页文本行
+            text_lines = []
+            for block in blocks:
+                if "lines" not in block:
+                    continue
+                for line in block["lines"]:
+                    text = "".join(s["text"] for s in line["spans"]).strip()
+                    if text:
+                        text_lines.append({
+                            "text": text,
+                            "y": line["bbox"][1],
+                            "y_bottom": line["bbox"][3],
+                        })
+
+            # 找本页的表题
+            table_captions = [
+                tl for tl in text_lines if table_caption_re.match(tl["text"])
+            ]
+            if not table_captions:
+                continue
+
+            for cap in table_captions:
+                # 检查本页底部是否有表格相关内容（表题下方的内容延伸到页底附近）
+                bottom_lines = [
+                    tl for tl in text_lines
+                    if tl["y"] > cap["y"] and tl["y_bottom"] > footer_top - 60
+                ]
+                if not bottom_lines:
+                    continue  # 表格没到页底，不算跨页
+
+                # 检查下一页
+                next_page_idx = page_idx + 1
+                if next_page_idx >= total_pages:
+                    continue
+
+                next_page = doc[next_page_idx]
+                next_blocks = next_page.get_text("dict")["blocks"]
+
+                # 收集下一页顶部文本行（排除页眉区域，取顶部 150pt）
+                next_top_lines = []
+                for block in next_blocks:
+                    if "lines" not in block:
+                        continue
+                    for line in block["lines"]:
+                        text = "".join(s["text"] for s in line["spans"]).strip()
+                        if text and 60 < line["bbox"][1] < 210:
+                            next_top_lines.append(text)
+
+                if not next_top_lines:
+                    continue
+
+                # 检查下一页顶部是否有新的章节标题（如果有，说明表格没跨页）
+                chapter_re = re.compile(r"^第[一二三四五六七八九十\d]+章")
+                if any(chapter_re.match(t) for t in next_top_lines):
+                    continue
+
+                # 检查下一页顶部是否有"续表"标记或表头重复
+                has_cont_marker = any(
+                    "续" in t or table_caption_re.match(t)
+                    for t in next_top_lines
+                )
+
+                if not has_cont_marker:
+                    # 可能跨页且缺少续表标记
+                    # 额外确认：下一页顶部内容看起来像表格数据（含数字、短文本等）
+                    has_table_like = any(
+                        len(t) < 50 and (
+                            re.search(r"\d", t) or
+                            "\t" in t or
+                            "  " in t
+                        )
+                        for t in next_top_lines[:5]
+                    )
+
+                    if has_table_like:
+                        issues.append(_issue(
+                            next_page_idx + 1,
+                            f'{cap["text"][:25]}',
+                            "表格跨页续表头",
+                            "跨页表格应有续表标记和重复表头",
+                            "下一页顶部未发现续表标记",
                             "warning"
                         ))
 
