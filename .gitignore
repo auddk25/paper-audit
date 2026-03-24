@@ -3,6 +3,18 @@
 *.doc
 *.docx
 
+# === 实验数据 — 用户隐私 ===
+input/data/**/*.csv
+input/data/**/*.xlsx
+input/data/**/*.json
+input/data/**/*.txt
+!input/data/**/.gitkeep
+!input/data/README.md
+
+# === 本地配置 — 用户自定义 ===
+.claude/settings.local.json
+claude-progress.txt
+
 # === Python ===
 .venv/
 __pycache__/

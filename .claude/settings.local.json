@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "mcp__plugin_episodic-memory_episodic-memory__search",
-      "Bash(E:/code/paper-audit/.venv/Scripts/python.exe*)"
-    ]
-  }
-}

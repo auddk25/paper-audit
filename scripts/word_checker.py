@@ -1,4 +1,4 @@
-"""Word (.docx) format checker for NEU master's thesis (34 checks).
+"""Word (.docx) format checker for master's thesis (34 checks).
 
 Checks that are more reliable on Word than PDF:
   1.  Body font (正文宋体12pt)
@@ -8,7 +8,7 @@ Checks that are more reliable on Word than PDF:
   5.  Subsection heading (四号黑体14pt, 居左, 占2行)
   6.  Subsubsection heading (小四号黑体12pt, 居左, 占1行)
   7.  Special titles as level-1 (摘要/目录/参考文献/致谢)
-  8.  Page headers (楷体10.5pt, 左端"东北大学硕士学位论文", 右端章题)
+  8.  Page headers (楷体10.5pt, 左端固定文字, 右端章题)
   9.  Page numbers (12pt, 居中, ·N· or -N-)
   10. Figure numbering (按章编码 图X.Y, 图号与图题间一字空格)
   11. Figure caption font (五号宋体10.5pt)
@@ -66,6 +66,9 @@ SONGTI_NAMES = {"宋体", "SimSun", "STSong", "Song", "NSimSun"}
 HEITI_NAMES  = {"黑体", "SimHei", "STHei", "Hei"}
 KAITI_NAMES  = {"楷体", "KaiTi", "STKai", "Kai"}
 TNR_NAMES    = {"Times New Roman", "TimesNewRoman", "Times"}
+
+# === 可配置项：修改以下常量适配你的学校 ===
+HEADER_LEFT_TEXT = "东北大学硕士学位论文"  # 页眉左端固定文字，按你学校要求修改
 
 SPECIAL_LEVEL1_TITLES = {"摘要", "摘  要", "Abstract", "ABSTRACT",
                          "目录", "目  录", "参考文献", "参  考  文  献",
@@ -875,7 +878,7 @@ def _check_special_titles_as_level1(doc, ctx):
 # ---------- 8. Page headers ----------
 
 def _check_headers(doc, ctx):
-    """Check page headers: 楷体10.5pt, left='东北大学硕士学位论文', right=chapter."""
+    """Check page headers: 楷体10.5pt, left=HEADER_LEFT_TEXT, right=chapter."""
     issues = []
 
     for si, sec in enumerate(doc.sections):
@@ -894,17 +897,17 @@ def _check_headers(doc, ctx):
                 continue
             issues.append(_issue(
                 -1, f"Section {si}", "页眉内容",
-                "东北大学硕士学位论文 + 章标题",
+                f"{HEADER_LEFT_TEXT} + 章标题",
                 "页眉为空",
                 "warning"
             ))
             continue
 
-        # Check left side contains "东北大学硕士学位论文"
-        if "东北大学硕士学位论文" not in header_text:
+        # Check left side contains HEADER_LEFT_TEXT
+        if HEADER_LEFT_TEXT not in header_text:
             issues.append(_issue(
                 -1, f"Section {si}", "页眉左端",
-                "东北大学硕士学位论文",
+                HEADER_LEFT_TEXT,
                 f"{header_text[:30]}",
                 "error"
             ))

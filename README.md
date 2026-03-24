@@ -129,6 +129,39 @@ python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt
 ```
 
+### 首次部署配置
+
+克隆后需要配置以下内容才能运行审计：
+
+**1. 准备写作规范**（必须）
+```bash
+# 从模板创建你自己的写作规范
+cp examples/学术写作规范.template.md 学术写作规范.md
+# 编辑 学术写作规范.md，填入你学校/导师的具体要求
+```
+
+**2. 配置格式规则**（可选）
+```
+# 如果你的学校格式要求与默认不同，修改以下文件中的规则常量：
+# scripts/word_checker.py  → RULES 字典（字体/字号/间距等）
+# scripts/format_checker.py → RULES 字典（版芯尺寸等）
+```
+
+**3. 放入论文文件**
+```
+input/pdf/   ← 你的论文 PDF
+input/word/  ← 你的论文 Word (.docx)
+input/data/ch3~5/ ← 实验原始数据（CSV/Excel，用于交叉验证）
+```
+
+**4. 运行审计**
+```
+# 在 Claude Code 中运行
+/audit-paper
+```
+
+> ⚠️ 论文文件、实验数据、写作规范均为本地文件，不会上传到 git。
+
 ## 设计决策
 
 ### 为什么用 Word + PDF 双源？
