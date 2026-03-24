@@ -64,7 +64,9 @@ def check_format(pdf_path: str) -> dict:
     issues.extend(_check_image_resolution(pdf_path, structure))
     issues.extend(_check_equation_centering(pdf_path, structure))
     issues.extend(_check_equation_number_alignment(pdf_path, structure))
-    issues.extend(_check_table_cross_page(pdf_path, structure))
+    # TODO: _check_table_cross_page 误报率高（PDF无法可靠区分表格数据和正文），
+    # 暂时禁用。表格跨页检查改由 word_checker.py #28 通过 Word 表格属性实现。
+    # issues.extend(_check_table_cross_page(pdf_path, structure))
 
     errors = sum(1 for i in issues if i["severity"] == "error")
     warnings = len(issues) - errors
@@ -656,9 +658,9 @@ def _check_equation_number_alignment(pdf_path: str, structure: dict) -> list[dic
 def _check_table_cross_page(pdf_path: str, structure: dict) -> list[dict]:
     """检查表格跨页时是否有续表头。
 
-    找所有表题行（正则 ^表\\s*\\d+），对每个表题所在页 P，
-    检查 P 页底部和 P+1 页顶部是否都有表格相关文本。
-    如果跨页了，检查 P+1 页顶部是否有表头重复。
+    策略：找表题行，判断表格是否真的延伸到页底（通过检测表格特征：
+    短行、多列对齐、数字密集），而非把正文段落误认为表格内容。
+    如果确认跨页，检查下一页顶部是否有续表标记。
     """
     issues = []
     import fitz
@@ -675,7 +677,7 @@ def _check_table_cross_page(pdf_path: str, structure: dict) -> list[dict]:
             page_height = page.rect.height
             footer_top = page_height - 50
 
-            # 收集本页文本行
+            # 收集本页文本行（含 bbox 信息）
             text_lines = []
             for block in blocks:
                 if "lines" not in block:
@@ -687,6 +689,9 @@ def _check_table_cross_page(pdf_path: str, structure: dict) -> list[dict]:
                             "text": text,
                             "y": line["bbox"][1],
                             "y_bottom": line["bbox"][3],
+                            "x0": line["bbox"][0],
+                            "x1": line["bbox"][2],
+                            "width": line["bbox"][2] - line["bbox"][0],
                         })
 
             # 找本页的表题
@@ -697,15 +702,47 @@ def _check_table_cross_page(pdf_path: str, structure: dict) -> list[dict]:
                 continue
 
             for cap in table_captions:
-                # 检查本页底部是否有表格相关内容（表题下方的内容延伸到页底附近）
-                bottom_lines = [
-                    tl for tl in text_lines
-                    if tl["y"] > cap["y"] and tl["y_bottom"] > footer_top - 60
+                # 收集表题下方到页底的所有行
+                lines_after_cap = [
+                    tl for tl in text_lines if tl["y"] > cap["y_bottom"]
                 ]
-                if not bottom_lines:
-                    continue  # 表格没到页底，不算跨页
+                if not lines_after_cap:
+                    continue
 
-                # 检查下一页
+                # 判断这些行是否具有"表格特征"：
+                # 1. 多数行较短（<页宽60%）或包含多个空格分隔的列
+                # 2. 行间距较小且均匀
+                # 3. 不是连续的长段落文字
+                page_width = page.rect.width
+                table_like_lines = 0
+                paragraph_like_lines = 0
+                for tl in lines_after_cap:
+                    is_short = tl["width"] < page_width * 0.6
+                    has_columns = "  " in tl["text"] or "\t" in tl["text"]
+                    is_long_text = len(tl["text"]) > 60 and not has_columns
+                    if (is_short or has_columns) and not is_long_text:
+                        table_like_lines += 1
+                    elif is_long_text:
+                        paragraph_like_lines += 1
+
+                # 如果表格下方大部分是长段落文字，说明表格已结束，后面是正文
+                if paragraph_like_lines > table_like_lines:
+                    continue  # 不是跨页，是表格后接正文
+
+                # 检查最后一个表格样行是否接近页底
+                table_lines_sorted = sorted(
+                    [tl for tl in lines_after_cap
+                     if tl["width"] < page_width * 0.6 or "  " in tl["text"]],
+                    key=lambda x: x["y_bottom"],
+                    reverse=True
+                )
+                if not table_lines_sorted:
+                    continue
+                last_table_y = table_lines_sorted[0]["y_bottom"]
+                if last_table_y < footer_top - 80:
+                    continue  # 表格在页面中部就结束了，没到页底
+
+                # 确认跨页：检查下一页
                 next_page_idx = page_idx + 1
                 if next_page_idx >= total_pages:
                     continue
@@ -713,7 +750,6 @@ def _check_table_cross_page(pdf_path: str, structure: dict) -> list[dict]:
                 next_page = doc[next_page_idx]
                 next_blocks = next_page.get_text("dict")["blocks"]
 
-                # 收集下一页顶部文本行（排除页眉区域，取顶部 150pt）
                 next_top_lines = []
                 for block in next_blocks:
                     if "lines" not in block:
@@ -726,30 +762,29 @@ def _check_table_cross_page(pdf_path: str, structure: dict) -> list[dict]:
                 if not next_top_lines:
                     continue
 
-                # 检查下一页顶部是否有新的章节标题（如果有，说明表格没跨页）
+                # 排除：下一页是新章节
                 chapter_re = re.compile(r"^第[一二三四五六七八九十\d]+章")
                 if any(chapter_re.match(t) for t in next_top_lines):
                     continue
 
-                # 检查下一页顶部是否有"续表"标记或表头重复
+                # 排除：下一页是新的节标题
+                section_re = re.compile(r"^\d+\.\d+")
+                if any(section_re.match(t) for t in next_top_lines[:2]):
+                    continue
+
+                # 检查下一页顶部是否有续表标记
                 has_cont_marker = any(
                     "续" in t or table_caption_re.match(t)
-                    for t in next_top_lines
+                    for t in next_top_lines[:3]
                 )
 
                 if not has_cont_marker:
-                    # 可能跨页且缺少续表标记
-                    # 额外确认：下一页顶部内容看起来像表格数据（含数字、短文本等）
-                    has_table_like = any(
-                        len(t) < 50 and (
-                            re.search(r"\d", t) or
-                            "\t" in t or
-                            "  " in t
-                        )
-                        for t in next_top_lines[:5]
+                    # 下一页顶部也要有表格特征才报
+                    next_table_like = sum(
+                        1 for t in next_top_lines[:5]
+                        if len(t) < 40 and ("  " in t or re.search(r"\d.*\d", t))
                     )
-
-                    if has_table_like:
+                    if next_table_like >= 2:
                         issues.append(_issue(
                             next_page_idx + 1,
                             f'{cap["text"][:25]}',

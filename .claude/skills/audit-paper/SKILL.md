@@ -103,24 +103,56 @@ Main agent 全程控制流水线，根据阶段特性决定串行/并行。
 
 **并行**启动以下 4 个任务：
 
-```bash
-# 任务 A: Word 格式检查（27项：字体/标题/页眉/页脚/图表/公式/参考文献等）
-.venv/Scripts/python ./scripts/word_checker.py "<DOCX路径>"
+**重要：不要在 Bash 命令中硬编码中文文件名（Windows 编码问题）。必须用 Python 动态查找文件。**
 
-# 任务 B: PDF 空间检查（5项：页面尺寸/版芯/题注位置/标注字号/页底空白）
-.venv/Scripts/python ./scripts/format_checker.py "<PDF路径>"
-
-# 任务 C: 交叉引用检查
-.venv/Scripts/python ./scripts/cross_ref_checker.py "<PDF路径>"
-
-# 任务 D: 结构提取
+```python
+# 统一用 Python 执行，避免中文文件名编码问题
 .venv/Scripts/python -u -c "
-import sys, io, json
+import os, sys, io, json
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.path.insert(0, 'scripts')
-from pdf_extractor import extract_structure
-print(json.dumps(extract_structure(r'<PDF路径>'), ensure_ascii=False, indent=2))
+
+# 自动发现文件
+docx = next((f for f in os.listdir('input/word') if f.endswith('.docx')), None)
+pdf = next((f for f in os.listdir('input/pdf') if f.endswith('.pdf')), None)
+
+results = {}
+
+# 任务 A: Word 格式检查（34项）
+if docx:
+    from word_checker import check_word
+    results['word'] = check_word(os.path.join('input/word', docx))
+    print(f'Word: {results[\"word\"][\"summary\"][\"total\"]}项')
+
+# 任务 B: PDF 空间检查（9项）
+if pdf:
+    from format_checker import check_format
+    results['pdf'] = check_format(os.path.join('input/pdf', pdf))
+    print(f'PDF: {results[\"pdf\"][\"summary\"][\"total\"]}项')
+
+# 任务 C: 交叉引用检查
+if pdf:
+    from cross_ref_checker import check_cross_refs
+    results['crossref'] = check_cross_refs(os.path.join('input/pdf', pdf))
+    print(f'CrossRef: 无效{results[\"crossref\"][\"summary\"][\"total_invalid\"]}')
+
+# 任务 D: 结构提取
+if pdf:
+    from pdf_extractor import extract_structure
+    results['structure'] = extract_structure(os.path.join('input/pdf', pdf))
+    print(f'Structure: {results[\"structure\"][\"pages\"]}页 {len(results[\"structure\"][\"chapters\"])}章')
+
+print(json.dumps(results, ensure_ascii=False, indent=2))
 "
+```
+
+或者分开并行执行（每个用 Python 动态查找，不硬编码文件名）：
+
+```python
+# 每个任务独立运行时的文件查找模板：
+import os
+docx = next(f for f in os.listdir('input/word') if f.endswith('.docx'))
+pdf = next(f for f in os.listdir('input/pdf') if f.endswith('.pdf'))
 ```
 
 收集所有 JSON 结果后进入 Stage 1.5。将格式检查结果立即写入 `output/08-格式检查.md`。
