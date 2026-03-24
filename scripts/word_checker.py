@@ -1723,8 +1723,10 @@ def _check_mixed_punctuation(doc, ctx):
     re_citation = re.compile(r'\[\d+(?:[,，]\d+)*\]')
     # English parens around English content: (XXX) where XXX is English
     re_en_paren = re.compile(r'\([A-Za-z][A-Za-z0-9 ,.\-]*\)')
-    # Chinese parens containing English content: （XXX, 简称YYY）
-    re_cn_paren_en = re.compile(r'（[^）]*[A-Za-z][^）]*）')
+    # Chinese parens containing PURE English content: （Proof of Work）
+    # Does NOT exclude mixed CN+EN like （International Energy Agency, 简称IEA）
+    # because the comma before "简称" should be Chinese comma ，
+    re_cn_paren_pure_en = re.compile(r'（[A-Za-z0-9 ,.\-/]+）')
     # Math tuples: (n,k) (2,3) etc.
     re_math_tuple = re.compile(r'\(\d+\s*,\s*\d+\)')
     # Book/paper titles in 《》 containing English: 《Electricity 2025: Analysis》
@@ -1753,7 +1755,7 @@ def _check_mixed_punctuation(doc, ctx):
         # Section refs first (before decimal eats digits)
         cleaned = re_section_ref.sub('##', text)
         cleaned = re_formula_num.sub('##', cleaned)
-        cleaned = re_cn_paren_en.sub('##', cleaned)  # 全角括号内英文
+        cleaned = re_cn_paren_pure_en.sub('##', cleaned)  # 全角括号内纯英文
         cleaned = re_math_tuple.sub('##', cleaned)    # 数学元组 (2,3)
         cleaned = re_book_title_en.sub('##', cleaned) # 书名号内英文标题
         cleaned = re_en_paren.sub('##', cleaned)
