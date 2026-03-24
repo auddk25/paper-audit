@@ -1,26 +1,13 @@
-"""Format checker for master's thesis PDF (NEU standard).
+"""Format checker for master's thesis PDF — spatial checks only.
 
-Checks 15 categories:
-  1.  Page size (A4)
-  2.  Body area (版芯 160×247mm)
-  3.  Lines per page (30~35) & chars per line (35~38)
-  4.  Body font/size (小四宋体 12pt)
-  5.  English font (Times New Roman)
-  6.  Chapter heading font/size (二号黑体 22pt)
-  7.  Section heading font/size (三号/四号黑体)
-  8.  Chapter heading alignment (centered)
-  9.  Section heading alignment (left-aligned)
-  10. Heading spacing (chapter 3 lines, section 2 lines)
-  11. Figure/table/equation numbering continuity
-  12. Figure caption (below, 五号宋体) & table caption (above, 五号宋体)
-  13. Reference numbering + GB/T 7714 format
-  14. Page headers (left+right, 楷体五号, right must match chapter title)
-  15. Page numbers
-  16. Paragraph last-line min 5 chars
-  17. Page bottom blank ≤ 2 lines
-  18. Chapter title length ≤ 20 chars
-  19. TOC: entry font sizes (一级小三/其他小四), page numbers (小四),
-      numbering continuity, TOC-vs-body title consistency
+Checks 5 categories that require PDF coordinate analysis:
+  1. Page size (A4: 210x297mm)
+  2. Body area (版芯 160x247mm)
+  3. Caption position (图题在图下方 + 表题在表上方)
+  4. Page bottom blank (页底空白 <= 2行)
+  5. Annotation vs caption size (图中标注字号 <= 图题字号)
+
+Font/text/numbering checks have been migrated to word_checker.py.
 
 Usage:
     python format_checker.py <thesis.pdf>
@@ -32,13 +19,10 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(__file__))
-from pdf_extractor import extract_structure, extract_page_spans
+from pdf_extractor import extract_structure
 
 
-# === NEU Format Rules ===
-# Chinese font size standard (号 → pt):
-#   初号=42, 小初=36, 一号=26, 小一=24, 二号=22, 小二=18,
-#   三号=16, 小三=15, 四号=14, 小四=12, 五号=10.5, 小五=9
+# === NEU Format Rules (spatial only) ===
 RULES = {
     "page_size": {
         "width_mm": 210.0,
@@ -48,67 +32,20 @@ RULES = {
     "body_area": {
         "width_mm": 160.0,
         "height_mm": 247.0,
-        "tolerance_mm": 5.0,  # 宽容一些，排版有微调
-    },
-    "lines_per_page": {"min": 30, "max": 35},
-    "chars_per_line": {"min": 35, "max": 38},
-    "body_font": {
-        "name_contains": ["SimSun", "宋体", "Song", "STSong"],
-        "size_pt": 12.0,
-        "tolerance_pt": 0.5,
-    },
-    "english_font": {
-        "name_contains": ["Times", "TimesNewRoman"],
-        "size_pt": 12.0,
-        "tolerance_pt": 0.5,
-    },
-    "chapter_heading": {
-        "name_contains": ["SimHei", "黑体", "Hei", "STHei"],
-        "size_pt": 22.0,
-        "tolerance_pt": 1.0,
-        "alignment": "center",
-        "spacing_lines": 3,  # 占3行
-    },
-    "section_heading": {
-        "name_contains": ["SimHei", "黑体", "Hei", "STHei"],
-        "size_pt": 16.0,
-        "tolerance_pt": 1.0,
-        "alignment": "left",
-        "spacing_lines": 2,  # 占2行
-    },
-    "subsection_heading": {
-        "name_contains": ["SimHei", "黑体", "Hei", "STHei"],
-        "size_pt": 14.0,
-        "tolerance_pt": 1.0,
-        "alignment": "left",
-        "spacing_lines": 2,  # 占2行
-    },
-    "subsubsection_heading": {
-        "name_contains": ["SimHei", "黑体", "Hei", "STHei"],
-        "size_pt": 12.0,
-        "tolerance_pt": 0.5,
-        "alignment": "left",
-        "spacing_lines": 1,  # 占1行
+        "tolerance_mm": 5.0,
     },
     "caption_font": {
-        "name_contains": ["SimSun", "宋体", "Song", "STSong"],
         "size_pt": 10.5,  # 五号
         "tolerance_pt": 0.5,
     },
-    "header_font": {
-        "name_contains": ["KaiTi", "楷体", "Kai", "STKai"],
-        "size_pt": 10.5,
-        "tolerance_pt": 0.5,
-    },
-    "header_left": "东北大学硕士学位论文",
 }
 
-# PT → MM conversion factor
+# PT -> MM conversion factor
 PT_TO_MM = 25.4 / 72
 
 
 def check_format(pdf_path: str) -> dict:
-    """Run all format checks on a thesis PDF.
+    """Run all PDF spatial checks on a thesis PDF.
 
     Returns dict with 'issues' list and 'summary' counts.
     """
@@ -117,21 +54,9 @@ def check_format(pdf_path: str) -> dict:
 
     issues.extend(_check_page_size(structure))
     issues.extend(_check_body_area(pdf_path, structure))
-    issues.extend(_check_lines_and_chars(pdf_path, structure))
-    issues.extend(_check_body_text(pdf_path, structure))
-    issues.extend(_check_english_font(pdf_path, structure))
-    issues.extend(_check_chapter_headings(structure))
-    issues.extend(_check_section_headings(structure))
-    issues.extend(_check_heading_alignment(pdf_path, structure))
-    issues.extend(_check_heading_spacing(pdf_path, structure))
-    issues.extend(_check_figure_table_numbering(pdf_path, structure))
-    issues.extend(_check_caption_format(pdf_path, structure))
-    issues.extend(_check_references(pdf_path, structure))
-    issues.extend(_check_headers(pdf_path, structure))
-    issues.extend(_check_page_numbers(pdf_path, structure))
-    issues.extend(_check_paragraph_last_line(pdf_path, structure))
+    issues.extend(_check_caption_position(pdf_path, structure))
     issues.extend(_check_page_bottom_blank(pdf_path, structure))
-    issues.extend(_check_toc_page_numbers(pdf_path, structure))
+    issues.extend(_check_annotation_vs_caption_size(pdf_path, structure))
 
     errors = sum(1 for i in issues if i["severity"] == "error")
     warnings = len(issues) - errors
@@ -151,6 +76,7 @@ def _issue(page, location, rule, expected, actual, severity="warning"):
         "expected": expected,
         "actual": actual,
         "severity": severity,
+        "source": "pdf",
     }
 
 
@@ -168,24 +94,12 @@ def _get_body_page_range(structure: dict) -> tuple[int, int]:
     return start, structure["pages"]
 
 
-def _is_cjk(char: str) -> bool:
-    """Check if a character is CJK (Chinese/Japanese/Korean)."""
-    cp = ord(char)
-    return (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF or
-            0xF900 <= cp <= 0xFAFF or 0x20000 <= cp <= 0x2A6DF)
-
-
-def _has_cjk(text: str) -> bool:
-    """Check if text contains any CJK characters."""
-    return any(_is_cjk(c) for c in text)
-
-
-# ═══════════════════════════════════════════════════════════════
-# 1. Page Size
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# 1. Page Size (A4: 210x297mm)
+# ===============================================================
 
 def _check_page_size(structure: dict) -> list[dict]:
-    """Check page dimensions are A4 (210×297mm)."""
+    """Check page dimensions are A4 (210x297mm)."""
     issues = []
     r = RULES["page_size"]
     ps = structure["page_size"]
@@ -202,56 +116,63 @@ def _check_page_size(structure: dict) -> list[dict]:
     return issues
 
 
-# ═══════════════════════════════════════════════════════════════
-# 2. Body Area (版芯 160×247mm)
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# 2. Body Area (版芯 160x247mm)
+# ===============================================================
 
 def _check_body_area(pdf_path: str, structure: dict) -> list[dict]:
-    """Check body area (版芯) dimensions: 160×247mm, not including header/footer."""
+    """Check body area (版芯) dimensions: 160x247mm, not including header/footer."""
     issues = []
     import fitz
-    doc = fitz.open(pdf_path)
     r = RULES["body_area"]
     start, end = _get_body_page_range(structure)
 
-    # Sample a few body pages
-    sample_pages = list(range(start - 1, min(end, start + 9)))  # first 10 body pages
-    if not sample_pages:
-        doc.close()
-        return issues
+    with fitz.open(pdf_path) as doc:
+        # Sample per-chapter: first, middle, last page of each chapter
+        sample_pages = set()
+        chapters = structure.get("chapters", [])
+        if chapters:
+            for i, ch in enumerate(chapters):
+                ch_start = ch["page"] - 1  # 0-indexed
+                ch_end = (chapters[i + 1]["page"] - 2) if i + 1 < len(chapters) else (end - 1)
+                ch_mid = (ch_start + ch_end) // 2
+                for p in [ch_start, ch_mid, ch_end]:
+                    if 0 <= p < len(doc):
+                        sample_pages.add(p)
+        else:
+            sample_pages = set(range(start - 1, end, 5))
 
-    widths_mm = []
-    heights_mm = []
+        sample_pages = sorted(sample_pages)
+        if not sample_pages:
+            return issues
 
-    for page_idx in sample_pages:
-        page = doc[page_idx]
-        blocks = page.get_text("dict")["blocks"]
+        widths_mm = []
+        heights_mm = []
 
-        # Collect bbox of all text blocks in body region (skip header/footer)
-        body_blocks = []
-        for block in blocks:
-            if "lines" not in block:
+        for page_idx in sample_pages:
+            page = doc[page_idx]
+            blocks = page.get_text("dict")["blocks"]
+
+            body_blocks = []
+            for block in blocks:
+                if "lines" not in block:
+                    continue
+                by0 = block["bbox"][1]
+                by1 = block["bbox"][3]
+                if by0 < 60 or by1 > page.rect.height - 50:
+                    continue
+                body_blocks.append(block["bbox"])
+
+            if not body_blocks:
                 continue
-            by0 = block["bbox"][1]
-            by1 = block["bbox"][3]
-            # Skip header (top 60pt) and footer (bottom 50pt)
-            if by0 < 60 or by1 > page.rect.height - 50:
-                continue
-            body_blocks.append(block["bbox"])
 
-        if not body_blocks:
-            continue
+            x0 = min(b[0] for b in body_blocks)
+            y0 = min(b[1] for b in body_blocks)
+            x1 = max(b[2] for b in body_blocks)
+            y1 = max(b[3] for b in body_blocks)
 
-        # Compute bounding box of all body content
-        x0 = min(b[0] for b in body_blocks)
-        y0 = min(b[1] for b in body_blocks)
-        x1 = max(b[2] for b in body_blocks)
-        y1 = max(b[3] for b in body_blocks)
-
-        widths_mm.append((x1 - x0) * PT_TO_MM)
-        heights_mm.append((y1 - y0) * PT_TO_MM)
-
-    doc.close()
+            widths_mm.append((x1 - x0) * PT_TO_MM)
+            heights_mm.append((y1 - y0) * PT_TO_MM)
 
     if widths_mm:
         avg_w = sum(widths_mm) / len(widths_mm)
@@ -259,1168 +180,298 @@ def _check_body_area(pdf_path: str, structure: dict) -> list[dict]:
 
         if abs(avg_w - r["width_mm"]) > r["tolerance_mm"]:
             issues.append(_issue(
-                start, "版芯", "版芯宽度",
+                start, f"版芯（抽样{len(sample_pages)}页）", "版芯宽度",
                 f'{r["width_mm"]}mm', f'{avg_w:.1f}mm', "warning"
             ))
         if abs(avg_h - r["height_mm"]) > r["tolerance_mm"]:
             issues.append(_issue(
-                start, "版芯", "版芯高度",
+                start, f"版芯（抽样{len(sample_pages)}页）", "版芯高度",
                 f'{r["height_mm"]}mm', f'{avg_h:.1f}mm', "warning"
             ))
 
     return issues
 
 
-# ═══════════════════════════════════════════════════════════════
-# 3. Lines per page (30~35) & chars per line (35~38)
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# 3. Caption Position (图题在图下方 + 表题在表上方)
+# ===============================================================
 
-def _check_lines_and_chars(pdf_path: str, structure: dict) -> list[dict]:
-    """Check lines per page (30~35) and characters per line (35~38)."""
-    issues = []
-    import fitz
-    doc = fitz.open(pdf_path)
-    r_lines = RULES["lines_per_page"]
-    r_chars = RULES["chars_per_line"]
-    start, end = _get_body_page_range(structure)
+def _check_caption_position(pdf_path: str, structure: dict) -> list[dict]:
+    """Check figure captions are below figures, table captions are above tables.
 
-    # Sample every 5th body page
-    for page_idx in range(start - 1, end, 5):
-        page = doc[page_idx]
-        blocks = page.get_text("dict")["blocks"]
-
-        # Count text lines in body region
-        body_lines = []
-        for block in blocks:
-            if "lines" not in block:
-                continue
-            for line in block["lines"]:
-                y = line["bbox"][1]
-                if 60 < y < page.rect.height - 50:
-                    text = "".join(s["text"] for s in line["spans"]).strip()
-                    if len(text) > 1:  # skip trivially short lines
-                        body_lines.append(text)
-
-        line_count = len(body_lines)
-        if line_count > 0 and (line_count < r_lines["min"] - 5 or line_count > r_lines["max"] + 5):
-            # Only flag significant deviations (allow some tolerance for pages with figures)
-            issues.append(_issue(
-                page_idx + 1, "正文区域",
-                "每页行数", f'{r_lines["min"]}~{r_lines["max"]}行',
-                f'{line_count}行', "warning"
-            ))
-
-        # Check chars per line on body text lines (not headings)
-        for text in body_lines:
-            char_count = len(text)
-            # Only check substantial body text lines, skip headings and short lines
-            if char_count < 10:
-                continue
-            if char_count > r_chars["max"] + 5:
-                issues.append(_issue(
-                    page_idx + 1, f'"{text[:15]}..."',
-                    "每行字数", f'{r_chars["min"]}~{r_chars["max"]}字',
-                    f'{char_count}字', "warning"
-                ))
-                break  # Only report once per page
-
-    doc.close()
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 4. Body Text Font/Size (小四宋体)
-# ═══════════════════════════════════════════════════════════════
-
-def _check_body_text(pdf_path: str, structure: dict) -> list[dict]:
-    """Check body text font and size on sampled pages."""
-    issues = []
-    r = RULES["body_font"]
-    start, _ = _get_body_page_range(structure)
-
-    checked_pages = set()
-    for pg in range(start, structure["pages"] + 1, 3):
-        if pg in checked_pages:
-            continue
-        checked_pages.add(pg)
-        spans = extract_page_spans(pdf_path, pg)
-
-        body_spans = [s for s in spans if 70 < s["y_pos"] < 780]
-        for span in body_spans:
-            if span["size"] > r["size_pt"] + r["tolerance_pt"] + 1:
-                continue
-            if len(span["text"].strip()) < 4:
-                continue
-            # Skip English text (handled separately)
-            if not _has_cjk(span["text"]):
-                continue
-
-            if not _font_matches(span["font"], r["name_contains"]):
-                issues.append(_issue(
-                    pg, f'"{span["text"][:20]}..."',
-                    "正文中文字体", "宋体(SimSun)", span["font"], "warning"
-                ))
-
-            if abs(span["size"] - r["size_pt"]) > r["tolerance_pt"]:
-                if span["size"] < r["size_pt"] - 2:
-                    continue
-                issues.append(_issue(
-                    pg, f'"{span["text"][:20]}..."',
-                    "正文字号", f'小四号({r["size_pt"]}pt)', f'{span["size"]}pt', "warning"
-                ))
-
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 5. English Font (Times New Roman)
-# ═══════════════════════════════════════════════════════════════
-
-def _check_english_font(pdf_path: str, structure: dict) -> list[dict]:
-    """Check English/number text uses Times New Roman, same size as body."""
-    issues = []
-    r = RULES["english_font"]
-    start, _ = _get_body_page_range(structure)
-
-    # Sample every 5th page
-    for pg in range(start, structure["pages"] + 1, 5):
-        spans = extract_page_spans(pdf_path, pg)
-        body_spans = [s for s in spans if 70 < s["y_pos"] < 780]
-
-        for span in body_spans:
-            text = span["text"].strip()
-            # Only check spans that are primarily English/numbers (not CJK)
-            if len(text) < 3 or _has_cjk(text):
-                continue
-            # Skip if it looks like a heading (larger font)
-            if span["size"] > 13:
-                continue
-
-            # Check font
-            if not _font_matches(span["font"], r["name_contains"]):
-                # Allow SimSun for mixed text — only flag purely non-CJK, non-Times
-                if not _font_matches(span["font"], RULES["body_font"]["name_contains"]):
-                    issues.append(_issue(
-                        pg, f'"{text[:20]}..."',
-                        "英文/数字字体", "Times New Roman",
-                        span["font"], "warning"
-                    ))
-
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 6. Chapter Heading Font/Size (二号黑体 22pt)
-# ═══════════════════════════════════════════════════════════════
-
-def _check_chapter_headings(structure: dict) -> list[dict]:
-    """Check chapter heading font, size, and title length (≤20 chars)."""
-    issues = []
-    r = RULES["chapter_heading"]
-    MAX_TITLE_CHARS = 20
-
-    for ch in structure["chapters"]:
-        if abs(ch["font_size"] - r["size_pt"]) > r["tolerance_pt"]:
-            issues.append(_issue(
-                ch["page"], f'第{ch["number"]}章 {ch["title"]}',
-                "章标题字号", f'二号黑体({r["size_pt"]}pt)',
-                f'{ch["font_size"]}pt', "error"
-            ))
-        if not _font_matches(ch["font_name"], r["name_contains"]):
-            issues.append(_issue(
-                ch["page"], f'第{ch["number"]}章 {ch["title"]}',
-                "章标题字体", "黑体(SimHei)", ch["font_name"], "error"
-            ))
-
-        # Title length check
-        title_len = len(ch["title"])
-        if title_len > MAX_TITLE_CHARS:
-            issues.append(_issue(
-                ch["page"], f'第{ch["number"]}章 {ch["title"]}',
-                "章标题长度", f"不超过{MAX_TITLE_CHARS}个字",
-                f'{title_len}个字，建议精简', "warning"
-            ))
-
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 7. Section Heading Font/Size
-# ═══════════════════════════════════════════════════════════════
-
-def _check_section_headings(structure: dict) -> list[dict]:
-    """Check section/subsection heading fonts and sizes."""
-    issues = []
-    for h in structure["headings"]:
-        if h["level"] == 2:
-            r = RULES["section_heading"]
-            label = "节标题"
-            expected_desc = f'三号黑体({r["size_pt"]}pt)'
-        elif h["level"] == 3:
-            r = RULES["subsection_heading"]
-            label = "款标题"
-            expected_desc = f'四号黑体({r["size_pt"]}pt)'
-        else:
-            continue
-
-        if abs(h["font_size"] - r["size_pt"]) > r["tolerance_pt"]:
-            issues.append(_issue(
-                h["page"], f'{h["number"]} {h["title"][:20]}',
-                f"{label}字号", expected_desc,
-                f'{h["font_size"]}pt', "warning"
-            ))
-        if not _font_matches(h["font_name"], r["name_contains"]):
-            issues.append(_issue(
-                h["page"], f'{h["number"]} {h["title"][:20]}',
-                f"{label}字体", "黑体(SimHei)", h["font_name"], "warning"
-            ))
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 8 & 9. Heading Alignment (chapter=center, section=left)
-# ═══════════════════════════════════════════════════════════════
-
-def _check_heading_alignment(pdf_path: str, structure: dict) -> list[dict]:
-    """Check chapter headings are centered, section headings are left-aligned."""
-    issues = []
-    import fitz
-    doc = fitz.open(pdf_path)
-
-    # Check chapter headings — should be centered
-    for ch in structure["chapters"]:
-        page = doc[ch["page"] - 1]
-        page_width = page.rect.width
-        blocks = page.get_text("dict")["blocks"]
-
-        for block in blocks:
-            if "lines" not in block:
-                continue
-            for line in block["lines"]:
-                text = "".join(s["text"] for s in line["spans"]).strip()
-                if f'第{ch["number"]}章' in text or f'第 {ch["number"]} 章' in text:
-                    # Check if centered: left margin ≈ right margin
-                    x0 = line["bbox"][0]
-                    x1 = line["bbox"][2]
-                    left_margin = x0
-                    right_margin = page_width - x1
-                    # Centered if margins are roughly equal (within 30pt)
-                    if abs(left_margin - right_margin) > 30:
-                        issues.append(_issue(
-                            ch["page"], f'第{ch["number"]}章 {ch["title"]}',
-                            "章标题对齐", "居中",
-                            f'左边距{left_margin:.0f}pt 右边距{right_margin:.0f}pt',
-                            "warning"
-                        ))
-                    break
-
-    # Check section headings — should be left-aligned
-    for h in structure["headings"]:
-        if h["level"] not in (2, 3):
-            continue
-        page = doc[h["page"] - 1]
-        page_width = page.rect.width
-        # Left margin for A4 with 160mm body: (210-160)/2 = 25mm ≈ 71pt
-        expected_left_margin = 71  # ~25mm
-        blocks = page.get_text("dict")["blocks"]
-
-        for block in blocks:
-            if "lines" not in block:
-                continue
-            for line in block["lines"]:
-                text = "".join(s["text"] for s in line["spans"]).strip()
-                if h["number"] in text and h["title"][:5] in text:
-                    x0 = line["bbox"][0]
-                    # Left-aligned: x0 should be near the left margin
-                    if x0 > expected_left_margin + 40:
-                        level_name = "节" if h["level"] == 2 else "款"
-                        issues.append(_issue(
-                            h["page"], f'{h["number"]} {h["title"][:15]}',
-                            f"{level_name}标题对齐", "居左",
-                            f'左边距{x0:.0f}pt（偏右）', "warning"
-                        ))
-                    break
-
-    doc.close()
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 10. Heading Spacing (chapter=3 lines, section=2 lines)
-# ═══════════════════════════════════════════════════════════════
-
-def _check_heading_spacing(pdf_path: str, structure: dict) -> list[dict]:
-    """Check heading vertical spacing: chapter=3行, section=2行, subsubsection=1行.
-
-    Estimated by measuring vertical gap before and after heading text.
-    一行 ≈ body line height ≈ 20pt (12pt font + ~8pt spacing at 1.5x line spacing).
+    Extracted from the former _check_caption_format — only position logic,
+    font checks have been migrated to word_checker.py.
     """
     issues = []
     import fitz
-    doc = fitz.open(pdf_path)
 
-    LINE_HEIGHT_PT = 20.0  # approximate body line height
+    fig_caption_re = re.compile(r"^图\s*\d+[.\s·]\d+")
+    tab_caption_re = re.compile(r"^表\s*\d+[.\s·]\d+")
 
-    for ch in structure["chapters"]:
-        page = doc[ch["page"] - 1]
+    with fitz.open(pdf_path) as doc:
+      for page_idx in range(len(doc)):
+        page = doc[page_idx]
         blocks = page.get_text("dict")["blocks"]
 
-        # Find the chapter heading line and the next content line
-        heading_y1 = None
-        next_content_y0 = None
-
-        all_lines = []
+        # Collect all text lines with y-position
+        text_lines = []
         for block in blocks:
             if "lines" not in block:
                 continue
             for line in block["lines"]:
                 text = "".join(s["text"] for s in line["spans"]).strip()
                 if text:
-                    all_lines.append((line["bbox"][1], line["bbox"][3], text))
+                    text_lines.append({
+                        "text": text,
+                        "y": line["bbox"][1],
+                        "y_bottom": line["bbox"][3],
+                    })
 
-        all_lines.sort(key=lambda x: x[0])
+        # Find visual elements: image blocks (type==1) + vector drawings
+        image_blocks = [block["bbox"] for block in blocks if block.get("type") == 1]
 
-        for i, (y0, y1, text) in enumerate(all_lines):
-            if f'第{ch["number"]}章' in text:
-                heading_y1 = y1
-                # Find next non-empty line
-                if i + 1 < len(all_lines):
-                    next_content_y0 = all_lines[i + 1][0]
-                break
+        # Also detect vector drawings (流程图、架构图等矢量图形)
+        try:
+            drawings = page.get_drawings()
+            if drawings:
+                # Cluster nearby drawings into bounding regions
+                for d in drawings:
+                    r = d.get("rect")
+                    if r and (r.width > 50 and r.height > 50):  # ignore tiny decorations
+                        image_blocks.append(tuple(r))
+        except Exception:
+            pass  # get_drawings not available in older PyMuPDF
 
-        if heading_y1 is not None and next_content_y0 is not None:
-            gap = next_content_y0 - heading_y1
-            expected_gap = RULES["chapter_heading"]["spacing_lines"] * LINE_HEIGHT_PT
-            # Chapter heading should "occupy" 3 lines of space
-            # The gap after should be roughly 2 line heights (heading is 1 line itself)
-            if gap < LINE_HEIGHT_PT * 1.0:
-                issues.append(_issue(
-                    ch["page"], f'第{ch["number"]}章 {ch["title"]}',
-                    "章标题间距", "占3行（标题后应有足够间距）",
-                    f'标题后间距{gap:.0f}pt（不足）', "warning"
-                ))
-
-    doc.close()
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 11. Figure / Table / Equation Numbering
-# ═══════════════════════════════════════════════════════════════
-
-def _check_figure_table_numbering(pdf_path: str, structure: dict) -> list[dict]:
-    """Check figure/table/equation numbering continuity within each chapter."""
-    issues = []
-    import fitz
-    doc = fitz.open(pdf_path)
-
-    fig_pattern = re.compile(r"图\s*(\d+)[.\s·](\d+)")
-    tab_pattern = re.compile(r"表\s*(\d+)[.\s·](\d+)")
-    eq_pattern = re.compile(r"[式公]\s*[（(]\s*(\d+)\s*[-.\s·]\s*(\d+)\s*[）)]")
-
-    fig_nums = {}
-    tab_nums = {}
-    eq_nums = {}
-
-    for page_idx in range(len(doc)):
-        text = doc[page_idx].get_text()
-
-        for m in fig_pattern.finditer(text):
-            ch, num = int(m.group(1)), int(m.group(2))
-            fig_nums.setdefault(ch, []).append((num, page_idx + 1))
-
-        for m in tab_pattern.finditer(text):
-            ch, num = int(m.group(1)), int(m.group(2))
-            tab_nums.setdefault(ch, []).append((num, page_idx + 1))
-
-        for m in eq_pattern.finditer(text):
-            ch, num = int(m.group(1)), int(m.group(2))
-            eq_nums.setdefault(ch, []).append((num, page_idx + 1))
-
-    doc.close()
-
-    for label, nums_dict in [("图", fig_nums), ("表", tab_nums), ("公式", eq_nums)]:
-        for ch, entries in nums_dict.items():
-            seen = sorted(set(n for n, _ in entries))
-            if not seen:
+        # --- Figure caption position: should be BELOW the figure ---
+        for tl in text_lines:
+            if not fig_caption_re.match(tl["text"]):
                 continue
-            expected = list(range(1, max(seen) + 1))
-            missing = set(expected) - set(seen)
-            for m in missing:
-                issues.append(_issue(
-                    entries[0][1], f"第{ch}章",
-                    f"{label}编号连续性",
-                    f"{label}{ch}.{m} 应存在",
-                    f"缺失 {label}{ch}.{m}", "warning"
-                ))
+            caption_y = tl["y"]
 
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 12. Caption Format: figure below + table above + 五号宋体
-# ═══════════════════════════════════════════════════════════════
-
-def _check_caption_format(pdf_path: str, structure: dict) -> list[dict]:
-    """Check figure captions are below figures, table captions are above tables.
-
-    Also checks caption font: 五号宋体 (10.5pt SimSun).
-    """
-    issues = []
-    import fitz
-    doc = fitz.open(pdf_path)
-    r = RULES["caption_font"]
-
-    fig_caption_re = re.compile(r"图\s*\d+[.\s·]\d+")
-    tab_caption_re = re.compile(r"表\s*\d+[.\s·]\d+")
-
-    for page_idx in range(len(doc)):
-        page = doc[page_idx]
-        blocks = page.get_text("dict")["blocks"]
-
-        # Collect all lines with their y-position and content
-        all_spans_on_page = []
-        for block in blocks:
-            if "lines" not in block:
+            if not image_blocks:
+                # No image or drawing detected — cannot verify, skip (不报误报)
                 continue
-            for line in block["lines"]:
-                for span in line["spans"]:
-                    text = span["text"].strip()
-                    if text:
-                        all_spans_on_page.append({
-                            "text": text,
-                            "font": span["font"],
-                            "size": span["size"],
-                            "y": line["bbox"][1],
-                        })
 
-        # Find image blocks (non-text blocks are images)
-        image_blocks = []
-        for block in blocks:
-            if block.get("type") == 1:  # image block
-                image_blocks.append(block["bbox"])
-
-        # Check figure captions
-        for span in all_spans_on_page:
-            if fig_caption_re.search(span["text"]):
-                # Figure caption should be BELOW the figure
-                # Check if there's an image block above this caption
-                caption_y = span["y"]
-                has_image_above = any(
-                    img[3] < caption_y + 10  # image bottom is above caption
+            has_image_above = any(
+                img[3] < caption_y + 10  # image/drawing bottom above caption
+                for img in image_blocks
+            )
+            if not has_image_above:
+                has_image_below = any(
+                    img[1] > caption_y - 10
                     for img in image_blocks
                 )
-                if image_blocks and not has_image_above:
-                    # Image exists but caption might be in wrong position
-                    has_image_below = any(
-                        img[1] > caption_y - 10
-                        for img in image_blocks
-                    )
-                    if has_image_below:
-                        issues.append(_issue(
-                            page_idx + 1, f'{span["text"][:25]}',
-                            "图题位置", "图题应在图的下方",
-                            "图题可能在图的上方", "warning"
-                        ))
-
-                # Check caption font: 五号宋体
-                if abs(span["size"] - r["size_pt"]) > r["tolerance_pt"]:
+                if has_image_below:
                     issues.append(_issue(
-                        page_idx + 1, f'{span["text"][:25]}',
-                        "图题字号", f'五号({r["size_pt"]}pt)',
-                        f'{span["size"]}pt', "warning"
-                    ))
-                if not _font_matches(span["font"], r["name_contains"]):
-                    issues.append(_issue(
-                        page_idx + 1, f'{span["text"][:25]}',
-                        "图题字体", "宋体(SimSun)", span["font"], "warning"
+                        page_idx + 1, f'{tl["text"][:25]}',
+                        "图题位置", "图题应在图的下方",
+                        "图题可能在图的上方", "warning"
                     ))
 
-            if tab_caption_re.search(span["text"]):
-                # Table caption font check: 五号宋体
-                if abs(span["size"] - r["size_pt"]) > r["tolerance_pt"]:
+        # --- Table caption position: should be ABOVE the table ---
+        for tl in text_lines:
+            if not tab_caption_re.match(tl["text"]):
+                continue
+            caption_y_bottom = tl["y_bottom"]
+
+            # Look for table-like content below caption.
+            # Tables in PDF either appear as image blocks or as dense
+            # text blocks with structured/aligned columns below the caption.
+            # Heuristic: there should be content immediately below the caption.
+            has_content_below = False
+            for tl2 in text_lines:
+                if tl2["y"] > caption_y_bottom + 5 and tl2["y"] < caption_y_bottom + 80:
+                    has_content_below = True
+                    break
+            if not has_content_below:
+                for img in image_blocks:
+                    if img[1] > caption_y_bottom - 5 and img[1] < caption_y_bottom + 80:
+                        has_content_below = True
+                        break
+
+            if not has_content_below:
+                # Caption is at bottom with nothing below — might be misplaced
+                # Check if there's content ABOVE that looks like table data
+                has_content_above = False
+                for tl2 in text_lines:
+                    if tl2["y_bottom"] < tl["y"] - 5 and tl2["y_bottom"] > tl["y"] - 80:
+                        has_content_above = True
+                        break
+                if has_content_above:
                     issues.append(_issue(
-                        page_idx + 1, f'{span["text"][:25]}',
-                        "表题字号", f'五号({r["size_pt"]}pt)',
-                        f'{span["size"]}pt', "warning"
-                    ))
-                if not _font_matches(span["font"], r["name_contains"]):
-                    issues.append(_issue(
-                        page_idx + 1, f'{span["text"][:25]}',
-                        "表题字体", "宋体(SimSun)", span["font"], "warning"
+                        page_idx + 1, f'{tl["text"][:25]}',
+                        "表题位置", "表题应在表的上方",
+                        "表题可能在表的下方", "warning"
                     ))
 
-    doc.close()
     return issues
 
 
-# ═══════════════════════════════════════════════════════════════
-# 13. References: numbering + GB/T 7714 format
-# ═══════════════════════════════════════════════════════════════
-
-def _check_references(pdf_path: str, structure: dict) -> list[dict]:
-    """Check reference format: sequential [N] numbering + GB/T 7714 patterns."""
-    issues = []
-    import fitz
-    doc = fitz.open(pdf_path)
-
-    ref_num_pattern = re.compile(r"\[(\d+)\]")
-    all_refs = []
-
-    # Find reference section
-    ref_start = None
-    for page_idx in range(len(doc)):
-        text = doc[page_idx].get_text()
-        if "参考文献" in text:
-            ref_start = page_idx
-            break
-
-    if ref_start is None:
-        doc.close()
-        return issues
-
-    # Collect all reference entries
-    ref_entries = []  # (ref_number, full_text, page)
-    current_ref_text = ""
-    current_ref_num = None
-    current_ref_page = ref_start + 1
-
-    for page_idx in range(ref_start, len(doc)):
-        text = doc[page_idx].get_text()
-        lines = text.split('\n')
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            m = re.match(r"\[(\d+)\]\s*(.*)", line)
-            if m:
-                # Save previous entry
-                if current_ref_num is not None:
-                    ref_entries.append((current_ref_num, current_ref_text.strip(), current_ref_page))
-                current_ref_num = int(m.group(1))
-                current_ref_text = m.group(2)
-                current_ref_page = page_idx + 1
-                if current_ref_num not in all_refs:
-                    all_refs.append(current_ref_num)
-            elif current_ref_num is not None:
-                current_ref_text += " " + line
-
-    # Save last entry
-    if current_ref_num is not None:
-        ref_entries.append((current_ref_num, current_ref_text.strip(), current_ref_page))
-
-    doc.close()
-
-    # --- Check sequential numbering ---
-    if all_refs:
-        max_ref = max(all_refs)
-        for expected in range(1, max_ref + 1):
-            if expected not in all_refs:
-                issues.append(_issue(
-                    ref_start + 1, "参考文献",
-                    "参考文献编号", f"[{expected}] 应存在",
-                    f"缺失 [{expected}]", "warning"
-                ))
-
-    # --- Check GB/T 7714 format ---
-    # Expected patterns:
-    #   [M] — monograph/book: Author. Title[M]. Place: Publisher, Year, Pages.
-    #   [J] — journal:        Author. Title[J]. Journal, Year, Vol(Issue): Pages.
-    #   [D] — dissertation:   Author. Title[D]. Place: University, Year.
-    #   [C] — conference:     Author. Title[C]//Proceedings. Place: Publisher, Year: Pages.
-    #   [P] — patent:         Author. Title[P]. Country: Patent No., Year.
-    #   [EB/OL] — online:     Author. Title[EB/OL]. URL, Date.
-
-    type_marker_re = re.compile(r"\[(M|J|D|C|P|S|R|N|Z|EB/OL|DB/OL|OL)\]")
-
-    for ref_num, ref_text, ref_page in ref_entries:
-        if not ref_text:
-            continue
-
-        # Check if type marker exists
-        if not type_marker_re.search(ref_text):
-            issues.append(_issue(
-                ref_page, f"[{ref_num}]",
-                "参考文献类型标识",
-                "应含文献类型标识如[M][J][D]等",
-                f'"{ref_text[:40]}..."', "warning"
-            ))
-            continue
-
-        # Check if it has author and period-separated structure
-        if '.' not in ref_text:
-            issues.append(_issue(
-                ref_page, f"[{ref_num}]",
-                "参考文献格式",
-                "GB/T 7714格式：作者.题名[类型].出版信息",
-                f'缺少句点分隔: "{ref_text[:40]}..."', "warning"
-            ))
-
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 14. Page Headers (left + right, 楷体五号)
-# ═══════════════════════════════════════════════════════════════
-
-def _get_current_chapter(page_idx_0based: int, chapters: list[dict]) -> dict | None:
-    """Find which chapter a page belongs to (page_idx is 0-based)."""
-    page_1based = page_idx_0based + 1
-    for i in range(len(chapters) - 1, -1, -1):
-        if page_1based >= chapters[i]["page"]:
-            return chapters[i]
-    return None
-
-
-def _check_headers(pdf_path: str, structure: dict) -> list[dict]:
-    """Check page headers on body pages.
-
-    NEU standard:
-      - Left:  楷体五号 "东北大学硕士学位论文"
-      - Right: 楷体五号 "第X章 章标题"
-    """
-    issues = []
-    import fitz
-    doc = fitz.open(pdf_path)
-
-    chapters = structure["chapters"]
-    if not chapters:
-        doc.close()
-        return issues
-
-    start_page = chapters[0]["page"] - 1  # 0-indexed
-
-    for page_idx in range(start_page, len(doc)):
-        page = doc[page_idx]
-        blocks = page.get_text("dict")["blocks"]
-        page_width = page.rect.width
-
-        # Header region: top 60pt
-        header_spans = []
-        for block in blocks:
-            if "lines" not in block:
-                continue
-            for line in block["lines"]:
-                if line["bbox"][1] < 60:
-                    for span in line["spans"]:
-                        if span["text"].strip():
-                            header_spans.append(span)
-
-        if not header_spans:
-            continue
-
-        # Split left / right by x-coordinate
-        mid_x = page_width / 2
-        left_spans = [s for s in header_spans if s["bbox"][0] < mid_x]
-        right_spans = [s for s in header_spans if s["bbox"][0] >= mid_x]
-
-        # --- Left header ---
-        left_text = "".join(s["text"].strip() for s in left_spans)
-        expected_left = RULES["header_left"]
-        if left_text and expected_left not in left_text:
-            issues.append(_issue(
-                page_idx + 1, "页眉左端",
-                "页眉内容", expected_left,
-                left_text[:30], "warning"
-            ))
-
-        # --- Right header: "第X章 章标题" must match chapter title exactly ---
-        right_text = "".join(s["text"].strip() for s in right_spans)
-        current_ch = _get_current_chapter(page_idx, chapters)
-        if current_ch and right_text:
-            expected_right = f"第{current_ch['number']}章{current_ch['title']}"
-            # Normalize: remove all whitespace for comparison
-            right_norm = re.sub(r"\s+", "", right_text)
-            expected_norm = re.sub(r"\s+", "", expected_right)
-            if right_norm != expected_norm:
-                issues.append(_issue(
-                    page_idx + 1, "页眉右端",
-                    "页眉章节标题",
-                    f"第{current_ch['number']}章 {current_ch['title']}",
-                    right_text[:30] if right_text else "（空）",
-                    "warning"
-                ))
-
-        # --- Header font: 楷体 + 五号 ---
-        for span in header_spans:
-            if not _font_matches(span["font"], RULES["header_font"]["name_contains"]):
-                issues.append(_issue(
-                    page_idx + 1, f'页眉 "{span["text"][:15]}"',
-                    "页眉字体", "楷体(KaiTi)",
-                    span["font"], "warning"
-                ))
-            r = RULES["header_font"]
-            if abs(span["size"] - r["size_pt"]) > r["tolerance_pt"]:
-                issues.append(_issue(
-                    page_idx + 1, f'页眉 "{span["text"][:15]}"',
-                    "页眉字号", f'五号({r["size_pt"]}pt)',
-                    f'{span["size"]}pt', "warning"
-                ))
-
-    doc.close()
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 15. Page Numbers
-# ═══════════════════════════════════════════════════════════════
-
-def _check_page_numbers(pdf_path: str, structure: dict) -> list[dict]:
-    """Check page numbers exist in footer region of body pages."""
-    issues = []
-    import fitz
-    doc = fitz.open(pdf_path)
-
-    start, _ = _get_body_page_range(structure)
-    page_num_pattern = re.compile(r"[-·]\s*\d+\s*[-·]|\d+")
-
-    for page_idx in range(start - 1, len(doc)):
-        page = doc[page_idx]
-        blocks = page.get_text("dict")["blocks"]
-        page_height = page.rect.height
-
-        footer_spans = []
-        for block in blocks:
-            if "lines" not in block:
-                continue
-            for line in block["lines"]:
-                if line["bbox"][1] > page_height - 50:
-                    for span in line["spans"]:
-                        if span["text"].strip():
-                            footer_spans.append(span)
-
-        footer_text = " ".join(s["text"].strip() for s in footer_spans)
-        if not page_num_pattern.search(footer_text):
-            issues.append(_issue(
-                page_idx + 1, "页脚",
-                "页码", "应有页码", "未检测到页码", "warning"
-            ))
-
-    doc.close()
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 16. Paragraph Last Line (末行不少于5字)
-# ═══════════════════════════════════════════════════════════════
-
-def _check_paragraph_last_line(pdf_path: str, structure: dict) -> list[dict]:
-    """Check that the last line of each paragraph has at least 5 characters.
-
-    If the last line is too short (<5 chars), suggest condensing the paragraph
-    to avoid a dangling short line (排版术语：孤字/短尾行).
-    """
-    issues = []
-    import fitz
-    doc = fitz.open(pdf_path)
-    start, end = _get_body_page_range(structure)
-
-    MIN_LAST_LINE_CHARS = 5
-
-    for page_idx in range(start - 1, end):
-        page = doc[page_idx]
-        blocks = page.get_text("dict")["blocks"]
-
-        for block in blocks:
-            if "lines" not in block:
-                continue
-
-            # Only check text blocks in body region
-            block_y = block["bbox"][1]
-            if block_y < 60 or block_y > page.rect.height - 50:
-                continue
-
-            lines = block["lines"]
-            if len(lines) < 2:
-                # Single-line blocks are headings or short items, skip
-                continue
-
-            # The last line of a multi-line block is a paragraph ending
-            last_line = lines[-1]
-            prev_line = lines[-2]
-            last_text = "".join(s["text"] for s in last_line["spans"]).strip()
-            prev_text = "".join(s["text"] for s in prev_line["spans"]).strip()
-
-            # Only check if previous line is a full-width line (>20 chars)
-            # to confirm this is a real paragraph, not a list or heading
-            if len(prev_text) < 20:
-                continue
-
-            # Skip if last line looks like a caption, formula, or reference
-            if re.match(r"^(图|表|式|[（(]\d)", last_text):
-                continue
-
-            char_count = len(last_text)
-            if 0 < char_count < MIN_LAST_LINE_CHARS:
-                issues.append(_issue(
-                    page_idx + 1,
-                    f'段落末行 "{last_text}"',
-                    "段落末行字数",
-                    f"末行不少于{MIN_LAST_LINE_CHARS}个字",
-                    f'仅{char_count}字，建议缩减上文使末行更饱满',
-                    "warning"
-                ))
-
-    doc.close()
-    return issues
-
-
-# ═══════════════════════════════════════════════════════════════
-# 17. Page Bottom Blank (页底不超过2行空白)
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# 4. Page Bottom Blank (页底空白 <= 2行)
+# ===============================================================
 
 def _check_page_bottom_blank(pdf_path: str, structure: dict) -> list[dict]:
     """Check that body pages don't have more than 2 blank lines at the bottom.
 
     Measures the gap between the last text line and the footer/page bottom.
-    2 blank lines ≈ 2 × 20pt = 40pt. Flag if gap > 60pt (≈3 lines).
+    2 blank lines ~ 2 x 20pt = 40pt. Flag if gap > 60pt (~3 lines).
     """
     issues = []
     import fitz
-    doc = fitz.open(pdf_path)
     start, end = _get_body_page_range(structure)
 
     LINE_HEIGHT_PT = 20.0
     MAX_BLANK_LINES = 2
-    MAX_GAP_PT = (MAX_BLANK_LINES + 1) * LINE_HEIGHT_PT  # 60pt ≈ 3行
 
-    for page_idx in range(start - 1, end):
-        page = doc[page_idx]
-        blocks = page.get_text("dict")["blocks"]
-        page_height = page.rect.height
-        footer_top = page_height - 50  # footer region starts here
+    with fitz.open(pdf_path) as doc:
+        for page_idx in range(start - 1, end):
+            page = doc[page_idx]
+            blocks = page.get_text("dict")["blocks"]
+            page_height = page.rect.height
+            footer_top = page_height - 50
 
-        # Find the y-coordinate of the bottom of the last body text line
-        last_body_y = 0
-        for block in blocks:
-            if "lines" not in block:
-                continue
-            for line in block["lines"]:
-                y_bottom = line["bbox"][3]
-                # Must be in body region (below header, above footer)
-                if 60 < line["bbox"][1] < footer_top:
-                    text = "".join(s["text"] for s in line["spans"]).strip()
-                    if text:
-                        last_body_y = max(last_body_y, y_bottom)
+            last_body_y = 0
+            for block in blocks:
+                if "lines" not in block:
+                    continue
+                for line in block["lines"]:
+                    y_bottom = line["bbox"][3]
+                    if 60 < line["bbox"][1] < footer_top:
+                        text = "".join(s["text"] for s in line["spans"]).strip()
+                        if text:
+                            last_body_y = max(last_body_y, y_bottom)
 
-        if last_body_y == 0:
-            continue
-
-        # Gap from last text to footer region
-        gap = footer_top - last_body_y
-        blank_lines = gap / LINE_HEIGHT_PT
-
-        if blank_lines > MAX_BLANK_LINES + 1:
-            # Skip chapter-start pages (they often have extra space after heading)
-            is_chapter_start = any(
-                ch["page"] == page_idx + 1 for ch in structure["chapters"]
-            )
-            if is_chapter_start:
+            if last_body_y == 0:
                 continue
 
-            issues.append(_issue(
-                page_idx + 1, "页面底部",
-                "页底空白",
-                f"页底空行不超过{MAX_BLANK_LINES}行",
-                f'底部约{blank_lines:.0f}行空白，建议调整内容填满',
-                "warning"
-            ))
+            gap = footer_top - last_body_y
+            blank_lines = gap / LINE_HEIGHT_PT
 
-    doc.close()
+            if blank_lines > MAX_BLANK_LINES + 1:
+                is_chapter_start = any(
+                    ch["page"] == page_idx + 1 for ch in structure["chapters"]
+                )
+                if is_chapter_start:
+                    continue
+
+                issues.append(_issue(
+                    page_idx + 1, "页面底部",
+                    "页底空白",
+                    f"页底空行不超过{MAX_BLANK_LINES}行",
+                    f'底部约{blank_lines:.0f}行空白，建议调整内容填满',
+                    "warning"
+                ))
+
     return issues
 
 
-# ═══════════════════════════════════════════════════════════════
-# 19. TOC Checks (目录：字号 + 逻辑结构 + 页码一致性)
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+# 5. Annotation vs Caption Size (图中标注字号 <= 图题字号)
+# ===============================================================
 
-def _find_toc_range(doc, structure: dict) -> tuple[int, int] | None:
-    """Find TOC page range (0-indexed, exclusive end). Returns None if not found."""
-    toc_start = None
-    for page_idx in range(min(len(doc), 15)):
-        text = doc[page_idx].get_text()
-        if re.search(r"目\s*录", text):
-            toc_start = page_idx
-            break
-    if toc_start is None:
-        return None
-    toc_end = len(doc)
-    if structure["chapters"]:
-        toc_end = structure["chapters"][0]["page"] - 1  # 1-indexed → exclusive
-    return toc_start, toc_end
+def _check_annotation_vs_caption_size(pdf_path: str, structure: dict) -> list[dict]:
+    """Check that annotation text inside figures/tables uses font size <= caption size.
 
-
-def _parse_toc_entries(doc, toc_start: int, toc_end: int) -> list[dict]:
-    """Parse TOC lines into structured entries.
-
-    Returns list of dicts: {level, number, title, page_num, font_size, page_idx}
-    """
-    entries = []
-    # Patterns to identify TOC entry types
-    ch_pattern = re.compile(r"第\s*([一二三四五六七八九十\d]+)\s*章\s*(.*)")
-    sec_pattern = re.compile(r"(\d+\.\d+)\s+(.*)")
-    subsec_pattern = re.compile(r"(\d+\.\d+\.\d+)\s+(.*)")
-    # Non-numbered first-level entries (摘要、致谢、参考文献 etc.)
-    special_l1 = re.compile(r"^(摘\s*要|ABSTRACT|Abstract|目\s*录|参考文献|致\s*谢|攻读|附\s*录|插图|缩略)")
-
-    for page_idx in range(toc_start, toc_end):
-        page = doc[page_idx]
-        blocks = page.get_text("dict")["blocks"]
-
-        for block in blocks:
-            if "lines" not in block:
-                continue
-            for line in block["lines"]:
-                spans = line["spans"]
-                if not spans:
-                    continue
-                full_text = "".join(s["text"] for s in spans).strip()
-                if not full_text or len(full_text) < 2:
-                    continue
-
-                # Skip the "目 录" title itself
-                if re.match(r"^目\s*录$", full_text):
-                    continue
-
-                # Get the first text span's font size (for the title part)
-                title_size = spans[0]["size"]
-
-                # Determine entry level
-                level = None
-                number = ""
-                title = full_text
-
-                m_sub = subsec_pattern.match(full_text)
-                m_sec = sec_pattern.match(full_text)
-                m_ch = ch_pattern.match(full_text)
-
-                if m_sub:
-                    level = 3
-                    number = m_sub.group(1)
-                    title = m_sub.group(2).strip()
-                elif m_sec:
-                    level = 2
-                    number = m_sec.group(1)
-                    title = m_sec.group(2).strip()
-                elif m_ch:
-                    level = 1
-                    number = m_ch.group(1)
-                    title = m_ch.group(2).strip()
-                elif special_l1.match(full_text):
-                    level = 1
-                    title = full_text
-
-                if level is None:
-                    continue
-
-                # Extract page number: rightmost numeric/roman span
-                page_num_text = None
-                page_num_size = None
-                for s in reversed(spans):
-                    t = s["text"].strip()
-                    if re.match(r"^\d+$", t) or re.match(r"^[IVXLCDMivxlcdm]+$", t):
-                        # Verify it's on the right side
-                        if s["bbox"][0] > 250:
-                            page_num_text = t
-                            page_num_size = s["size"]
-                            break
-
-                # Strip trailing page number and dots from title
-                title = re.sub(r"[\s.·…]+\d+\s*$", "", title).strip()
-                title = re.sub(r"[\s.·…]+[IVXLCDMivxlcdm]+\s*$", "", title).strip()
-
-                entries.append({
-                    "level": level,
-                    "number": number,
-                    "title": title,
-                    "page_num_text": page_num_text,
-                    "page_num_size": page_num_size,
-                    "title_size": round(title_size, 1),
-                    "page_idx": page_idx,
-                })
-
-    return entries
-
-
-def _check_toc_page_numbers(pdf_path: str, structure: dict) -> list[dict]:
-    """Comprehensive TOC check: font sizes, page number sizes, logical structure.
-
-    Rules:
-      - 一级标题条目：小三 (15pt)
-      - 二级及以下条目：小四 (12pt)
-      - 所有页码（阿拉伯/罗马数字）：小四 (12pt)
-      - 编号连续性：第1章→第2章→...，1.1→1.2→...
-      - 目录条目应与正文标题一致
+    NEU rule: text annotations within figures (axis labels, legends, etc.)
+    must not exceed the caption font size (五号 10.5pt).
     """
     issues = []
     import fitz
-    doc = fitz.open(pdf_path)
 
-    toc_range = _find_toc_range(doc, structure)
-    if toc_range is None:
-        doc.close()
-        return issues
+    fig_caption_re = re.compile(r"图\s*(\d+)[.\s·](\d+)")
+    tab_caption_re = re.compile(r"表\s*(\d+)[.\s·](\d+)")
 
-    toc_start, toc_end = toc_range
-    entries = _parse_toc_entries(doc, toc_start, toc_end)
+    caption_size = RULES["caption_font"]["size_pt"]  # 10.5pt
+    tolerance = RULES["caption_font"]["tolerance_pt"]
 
-    L1_SIZE = 15.0   # 小三
-    L2_SIZE = 12.0   # 小四
-    PAGE_NUM_SIZE = 12.0  # 小四
-    TOLERANCE = 0.5
+    with fitz.open(pdf_path) as doc:
+     for page_idx in range(len(doc)):
+        page = doc[page_idx]
+        blocks = page.get_text("dict")["blocks"]
 
-    # --- A. Font size checks ---
-    for entry in entries:
-        pg = entry["page_idx"] + 1
-
-        # A1. Title font size
-        if entry["level"] == 1:
-            if abs(entry["title_size"] - L1_SIZE) > TOLERANCE:
-                issues.append(_issue(
-                    pg,
-                    f'目录一级标题 "{entry["title"][:20]}"',
-                    "目录一级标题字号",
-                    f"小三号({L1_SIZE}pt)",
-                    f'{entry["title_size"]}pt',
-                    "warning"
-                ))
-        else:
-            if abs(entry["title_size"] - L2_SIZE) > TOLERANCE:
-                level_name = "二级" if entry["level"] == 2 else "三级"
-                issues.append(_issue(
-                    pg,
-                    f'目录{level_name}标题 "{entry["title"][:20]}"',
-                    f"目录{level_name}标题字号",
-                    f"小四号({L2_SIZE}pt)",
-                    f'{entry["title_size"]}pt',
-                    "warning"
-                ))
-
-        # A2. Page number font size — all must be 小四
-        if entry["page_num_size"] is not None:
-            if abs(entry["page_num_size"] - PAGE_NUM_SIZE) > TOLERANCE:
-                issues.append(_issue(
-                    pg,
-                    f'目录页码 "{entry["page_num_text"]}"（{entry["title"][:15]}）',
-                    "目录页码字号",
-                    f"小四号({PAGE_NUM_SIZE}pt)",
-                    f'{entry["page_num_size"]}pt',
-                    "warning"
-                ))
-        else:
-            # Page number missing — should be reported
-            issues.append(_issue(
-                pg,
-                f'目录条目 "{entry["title"][:20]}"',
-                "目录页码缺失",
-                "每条目录应有页码",
-                "未检测到页码",
-                "warning"
-            ))
-
-    # --- B. Logical structure: chapter numbering continuity ---
-    chapter_entries = [e for e in entries if e["level"] == 1 and e["number"]]
-    ch_nums = []
-    for entry in chapter_entries:
-        try:
-            from pdf_extractor import _chinese_to_int
-            ch_nums.append((_chinese_to_int(entry["number"]), entry))
-        except (ValueError, ImportError):
+        # 1. Identify image blocks (type==1) on this page
+        image_bboxes = [block["bbox"] for block in blocks if block.get("type") == 1]
+        if not image_bboxes:
             continue
 
-    # B1. Check for duplicates
-    seen_nums = {}
-    for num, entry in ch_nums:
-        if num in seen_nums:
-            issues.append(_issue(
-                entry["page_idx"] + 1,
-                f'目录第{entry["number"]}章',
-                "目录章编号重复",
-                "章编号不应重复",
-                f'第{num}章出现了多次',
-                "warning"
-            ))
-        seen_nums[num] = entry
+        # 2. Collect caption lines and their font sizes
+        caption_lines = []  # (y, size, text)
+        all_text_spans = []  # (bbox, size, text, font)
 
-    # B2. Check strictly increasing and sequential from 1
-    sorted_nums = [n for n, _ in ch_nums]
-    for i, num in enumerate(sorted_nums):
-        expected = i + 1
-        if num != expected:
-            entry = ch_nums[i][1]
-            if i > 0 and num <= sorted_nums[i - 1]:
-                # Out of order
-                issues.append(_issue(
-                    entry["page_idx"] + 1,
-                    f'目录第{entry["number"]}章',
-                    "目录章编号乱序",
-                    f"第{expected}章（应递增）",
-                    f'第{num}章',
-                    "warning"
-                ))
-            else:
-                # Gap (skip)
-                issues.append(_issue(
-                    entry["page_idx"] + 1,
-                    f'目录第{entry["number"]}章',
-                    "目录章编号跳号",
-                    f"第{expected}章",
-                    f'第{num}章（跳过了{num - expected}章）',
-                    "warning"
-                ))
-            break  # Only report first discontinuity
-
-    # --- C. Section numbering continuity within each chapter ---
-    sec_entries = [e for e in entries if e["level"] == 2 and e["number"]]
-    sec_by_chapter = {}
-    for e in sec_entries:
-        parts = e["number"].split(".")
-        if len(parts) == 2:
-            ch = parts[0]
-            sec_by_chapter.setdefault(ch, []).append(int(parts[1]))
-    for ch, secs in sec_by_chapter.items():
-        for i, expected in enumerate(range(1, max(secs) + 1)):
-            if expected not in secs:
-                issues.append(_issue(
-                    toc_start + 1,
-                    f"目录第{ch}章",
-                    "目录节编号连续性",
-                    f"{ch}.{expected} 应存在",
-                    f"缺失 {ch}.{expected}",
-                    "warning"
-                ))
-
-    # --- D. TOC entries vs actual headings: title consistency ---
-    actual_chapters = {ch["number"]: ch["title"] for ch in structure["chapters"]}
-    for entry in entries:
-        if entry["level"] == 1 and entry["number"]:
-            try:
-                from pdf_extractor import _chinese_to_int
-                ch_num = _chinese_to_int(entry["number"])
-            except (ValueError, ImportError):
+        for block in blocks:
+            if "lines" not in block:
                 continue
-            actual_title = actual_chapters.get(ch_num)
-            if actual_title is not None:
-                # Normalize for comparison (strip whitespace)
-                toc_title = re.sub(r"\s+", "", entry["title"])
-                body_title = re.sub(r"\s+", "", actual_title)
-                if toc_title != body_title:
-                    issues.append(_issue(
-                        entry["page_idx"] + 1,
-                        f'目录第{ch_num}章',
-                        "目录与正文标题一致性",
-                        f'正文标题: "{actual_title[:20]}"',
-                        f'目录标题: "{entry["title"][:20]}"',
-                        "warning"
-                    ))
+            for line in block["lines"]:
+                line_text = "".join(s["text"] for s in line["spans"]).strip()
+                for span in line["spans"]:
+                    span_text = span["text"].strip()
+                    if span_text:
+                        all_text_spans.append({
+                            "bbox": span["bbox"],
+                            "size": span["size"],
+                            "text": span_text,
+                            "font": span["font"],
+                        })
+                if fig_caption_re.match(line_text) or tab_caption_re.match(line_text):
+                    sizes = [s["size"] for s in line["spans"] if s["text"].strip()]
+                    avg_size = sum(sizes) / len(sizes) if sizes else caption_size
+                    caption_lines.append({
+                        "y": line["bbox"][1],
+                        "size": avg_size,
+                        "text": line_text,
+                    })
 
-    doc.close()
+        if not caption_lines:
+            continue
+
+        # 3. For each image, find text spans that overlap or are immediately
+        #    adjacent to the image bbox — these are annotations inside the figure
+        for img_bbox in image_bboxes:
+            ix0, iy0, ix1, iy1 = img_bbox
+            # Expand image region slightly to catch adjacent labels
+            margin = 5
+            for span in all_text_spans:
+                sx0, sy0, sx1, sy1 = span["bbox"]
+
+                # Check if span is within the image region
+                if (sx0 >= ix0 - margin and sx1 <= ix1 + margin and
+                        sy0 >= iy0 - margin and sy1 <= iy1 + margin):
+
+                    # Skip if this span is itself a caption
+                    span_text = span["text"]
+                    if fig_caption_re.search(span_text) or tab_caption_re.search(span_text):
+                        continue
+
+                    # Skip very short text (single chars, punctuation)
+                    if len(span_text) < 2:
+                        continue
+
+                    # Find the nearest caption to determine reference size
+                    nearest_caption_size = caption_size
+                    if caption_lines:
+                        # Use closest caption by y distance
+                        nearest = min(caption_lines,
+                                      key=lambda c: abs(c["y"] - sy0))
+                        nearest_caption_size = nearest["size"]
+
+                    # Check if annotation font is larger than caption
+                    if span["size"] > nearest_caption_size + tolerance:
+                        issues.append(_issue(
+                            page_idx + 1,
+                            f'图内标注 "{span_text[:20]}"',
+                            "图内标注字号",
+                            f"不大于图题字号({nearest_caption_size}pt)",
+                            f'{span["size"]}pt',
+                            "warning"
+                        ))
+
     return issues
 
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 # CLI Entry
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 
 def main():
     if len(sys.argv) < 2:
