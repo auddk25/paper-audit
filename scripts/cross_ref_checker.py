@@ -124,59 +124,65 @@ def _run_checks(doc, structure: dict) -> dict:
     fig_first_ref = {}  # {ref_num: (page, context)}
     tab_first_ref = {}
 
-    # Second pass: find all REFERENCES and check against definitions
+    # Second pass: find all REFERENCES using dict blocks (for y-coordinate)
     for page_idx in range(len(doc)):
-        text = doc[page_idx].get_text()
+        page = doc[page_idx]
         page_num = page_idx + 1
-        lines = text.split("\n")
+        blocks = page.get_text("dict")["blocks"]
 
-        for line in lines:
-            line_stripped = line.strip()
-            if not line_stripped:
+        for block in blocks:
+            if "lines" not in block:
                 continue
+            for line in block["lines"]:
+                line_stripped = "".join(s["text"] for s in line["spans"]).strip()
+                if not line_stripped:
+                    continue
+                line_y = line["bbox"][1]
 
-            # Section references
-            for m in sec_ref.finditer(line_stripped):
-                ref_num = m.group(1) or m.group(2) or m.group(3)
-                if ref_num:
-                    entry = _ref_entry(ref_num, f"节{ref_num}", page_num, line_stripped)
-                    if ref_num in existing_sections:
-                        entry["target_title"] = existing_sections[ref_num]
-                        results["sections"]["valid"].append(entry)
+                # Section references
+                for m in sec_ref.finditer(line_stripped):
+                    ref_num = m.group(1) or m.group(2) or m.group(3)
+                    if ref_num:
+                        entry = _ref_entry(ref_num, f"节{ref_num}", page_num, line_stripped)
+                        if ref_num in existing_sections:
+                            entry["target_title"] = existing_sections[ref_num]
+                            results["sections"]["valid"].append(entry)
+                        else:
+                            results["sections"]["invalid"].append(entry)
+
+                # Figure references (skip pure caption lines)
+                for m in fig_ref.finditer(line_stripped):
+                    is_caption = bool(fig_def.match(line_stripped))
+                    has_ref_verb = bool(re.search(
+                        r"(如图|如表|所示|给出|见图|见表|列出|对比|展示)", line_stripped))
+                    if is_caption and not has_ref_verb:
+                        continue  # Pure caption, skip
+                    ref_num = f"{m.group(1)}.{m.group(2)}"
+                    entry = _ref_entry(ref_num, f"图{ref_num}", page_num, line_stripped)
+                    if ref_num in existing_figures:
+                        results["figures"]["valid"].append(entry)
                     else:
-                        results["sections"]["invalid"].append(entry)
+                        results["figures"]["invalid"].append(entry)
+                    # Record first body-text reference position (including caption+verb lines)
+                    if ref_num not in fig_first_ref and (not is_caption or has_ref_verb):
+                        fig_first_ref[ref_num] = (page_num, line_y, line_stripped[:50])
 
-            # Figure references (skip pure caption lines, keep body-text refs)
-            for m in fig_ref.finditer(line_stripped):
-                if fig_def.match(line_stripped):
-                    has_ref_verb = re.search(r"[给出|所示|如|见|列出|对比|展示]", line_stripped)
-                    if not has_ref_verb:
+                # Table references (skip pure caption lines)
+                for m in tab_ref.finditer(line_stripped):
+                    is_caption = bool(tab_def.match(line_stripped))
+                    has_ref_verb = bool(re.search(
+                        r"(如图|如表|所示|给出|见图|见表|列出|对比|展示)", line_stripped))
+                    if is_caption and not has_ref_verb:
                         continue  # Pure caption, skip
-                ref_num = f"{m.group(1)}.{m.group(2)}"
-                entry = _ref_entry(ref_num, f"图{ref_num}", page_num, line_stripped)
-                if ref_num in existing_figures:
-                    results["figures"]["valid"].append(entry)
-                else:
-                    results["figures"]["invalid"].append(entry)
-                # Record first reference position (body text only)
-                if ref_num not in fig_first_ref and not fig_def.match(line_stripped):
-                    fig_first_ref[ref_num] = (page_num, line_stripped[:50])
-
-            # Table references (skip pure caption lines, keep body-text refs)
-            for m in tab_ref.finditer(line_stripped):
-                if tab_def.match(line_stripped):
-                    has_ref_verb = re.search(r"[给出|所示|如|见|列出|对比|展示]", line_stripped)
-                    if not has_ref_verb:
-                        continue  # Pure caption, skip
-                ref_num = f"{m.group(1)}.{m.group(2)}"
-                entry = _ref_entry(ref_num, f"表{ref_num}", page_num, line_stripped)
-                if ref_num in existing_tables:
-                    results["tables"]["valid"].append(entry)
-                else:
-                    results["tables"]["invalid"].append(entry)
-                # Record first reference position
-                if ref_num not in tab_first_ref and not tab_def.match(line_stripped):
-                    tab_first_ref[ref_num] = (page_num, line_stripped[:50])
+                    ref_num = f"{m.group(1)}.{m.group(2)}"
+                    entry = _ref_entry(ref_num, f"表{ref_num}", page_num, line_stripped)
+                    if ref_num in existing_tables:
+                        results["tables"]["valid"].append(entry)
+                    else:
+                        results["tables"]["invalid"].append(entry)
+                    # Record first body-text reference position
+                    if ref_num not in tab_first_ref and (not is_caption or has_ref_verb):
+                        tab_first_ref[ref_num] = (page_num, line_y, line_stripped[:50])
 
             # Equation references (skip definition lines)
             for m in eq_ref.finditer(line_stripped):
@@ -207,40 +213,40 @@ def _run_checks(doc, structure: dict) -> dict:
     }
 
     # === Order check: 先文后图/表 ===
-    # Rule: first body-text reference (如图X.Y所示) must appear on the
-    # same page or BEFORE the definition (图X.Y 标题行).
-    # Violation: definition on page N, first reference on page N+1 or later.
+    # Rule: first body-text reference must appear BEFORE the definition.
+    # Compare page first; if same page, compare y-coordinate.
+    # fig_first_ref/tab_first_ref: {ref_num: (page, y, context)}
+    # fig_def_pos/tab_def_pos: {ref_num: (page, y)}
     order_violations = []
 
     for ref_num in existing_figures:
         if ref_num in fig_first_ref and ref_num in fig_def_pos:
-            ref_page = fig_first_ref[ref_num][0]
-            def_page = fig_def_pos[ref_num][0]
-            if ref_page > def_page:
+            ref_page, ref_y, ref_ctx = fig_first_ref[ref_num]
+            def_page, def_y = fig_def_pos[ref_num]
+            # Violation: ref appears AFTER def (later page, or same page but lower y)
+            if ref_page > def_page or (ref_page == def_page and ref_y > def_y):
                 order_violations.append({
                     "type": "图",
                     "ref": ref_num,
                     "label": f"图{ref_num}",
                     "def_page": def_page,
                     "ref_page": ref_page,
-                    "ref_context": fig_first_ref[ref_num][1],
+                    "ref_context": ref_ctx,
                     "issue": f"图{ref_num}定义在p{def_page}，首次引用在p{ref_page}（违反先文后图）",
                 })
 
     for ref_num in existing_tables:
         if ref_num in tab_first_ref and ref_num in tab_def_pos:
-            ref_page = tab_first_ref[ref_num][0]
-            def_page = tab_def_pos[ref_num][0]
-            # For tables: caption is ABOVE the table, so reference should
-            # come before or on same page as caption
-            if ref_page > def_page:
+            ref_page, ref_y, ref_ctx = tab_first_ref[ref_num]
+            def_page, def_y = tab_def_pos[ref_num]
+            if ref_page > def_page or (ref_page == def_page and ref_y > def_y):
                 order_violations.append({
                     "type": "表",
                     "ref": ref_num,
                     "label": f"表{ref_num}",
                     "def_page": def_page,
                     "ref_page": ref_page,
-                    "ref_context": tab_first_ref[ref_num][1],
+                    "ref_context": ref_ctx,
                     "issue": f"表{ref_num}定义在p{def_page}，首次引用在p{ref_page}（违反先文后表）",
                 })
 

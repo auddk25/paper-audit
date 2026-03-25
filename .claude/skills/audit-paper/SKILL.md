@@ -149,10 +149,14 @@ print(json.dumps(results, ensure_ascii=False, indent=2))
 或者分开并行执行（每个用 Python 动态查找，不硬编码文件名）：
 
 ```python
-# 每个任务独立运行时的文件查找模板：
+# 每个任务独立运行时的文件查找模板（带错误处理）：
 import os
-docx = next(f for f in os.listdir('input/word') if f.endswith('.docx'))
-pdf = next(f for f in os.listdir('input/pdf') if f.endswith('.pdf'))
+docx = next((f for f in os.listdir('input/word') if f.endswith('.docx')), None)
+pdf = next((f for f in os.listdir('input/pdf') if f.endswith('.pdf')), None)
+if not docx:
+    raise FileNotFoundError("未找到 input/word 下的 .docx 文件")
+if not pdf:
+    raise FileNotFoundError("未找到 input/pdf 下的 .pdf 文件")
 ```
 
 收集所有 JSON 结果后进入 Stage 1.5。将格式检查结果立即写入 `output/08-格式检查.md`。

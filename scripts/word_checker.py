@@ -2014,12 +2014,18 @@ def _check_formula_source_remnants(doc, ctx):
     # Collect reference para indices for exclusion
     ref_indices = {idx for idx, _, _ in ctx["references"]}
 
+    # Exclusion: file paths like C:\text\... or D:\log\...
+    re_path = re.compile(r'[A-Za-z]:\\')
+
     for pidx in ctx["body_paras"]:
         text = paragraphs[pidx].text.strip()
         if not text or pidx in ref_indices:
             continue
         # Skip very short text
         if len(text) < 5:
+            continue
+        # Skip lines that look like file paths
+        if re_path.search(text):
             continue
 
         for pattern, symbol, desc in patterns:
@@ -2049,17 +2055,7 @@ def _check_duplicate_punctuation(doc, ctx):
     issues = []
     paragraphs = doc.paragraphs
 
-    # 中文标点
-    cn_puncts = "，。；：！？、—…"
-    # 英文标点
-    en_puncts = ",.;:!?"
-    # 所有标点合集
-    all_puncts = cn_puncts + en_puncts
-
-    # 连续两个相同标点的正则
-    re_dup = re.compile(r'([' + re.escape(all_puncts) + r'])\1+')
-
-    # 中英文标点混合重复: ,，  .。  ;；  :：
+    # 中英文标点混合重复: ,，  .。  ;；  :：  以及同类连续
     mixed_pairs = [
         (re.compile(r'[,，]{2,}'), '逗号'),
         (re.compile(r'[.。]{2,}'), '句号'),
