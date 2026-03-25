@@ -2004,6 +2004,103 @@ def _check_formula_source_remnants(doc, ctx):
     return issues
 
 
+# ---------- 36. Duplicate punctuation ----------
+
+def _check_duplicate_punctuation(doc, ctx):
+    """检查连续重复标点：，，  。。  ；；  ：：  ！！  ？？  等。
+
+    也检查中英文标点混合重复如 ,，  .。 等。
+    """
+    issues = []
+    paragraphs = doc.paragraphs
+
+    # 中文标点
+    cn_puncts = "，。；：！？、—…"
+    # 英文标点
+    en_puncts = ",.;:!?"
+    # 所有标点合集
+    all_puncts = cn_puncts + en_puncts
+
+    # 连续两个相同标点的正则
+    re_dup = re.compile(r'([' + re.escape(all_puncts) + r'])\1+')
+
+    # 中英文标点混合重复: ,，  .。  ;；  :：
+    mixed_pairs = [
+        (re.compile(r'[,，]{2,}'), '逗号'),
+        (re.compile(r'[.。]{2,}'), '句号'),
+        (re.compile(r'[;；]{2,}'), '分号'),
+        (re.compile(r'[:：]{2,}'), '冒号'),
+        (re.compile(r'[!！]{2,}'), '感叹号'),
+        (re.compile(r'[?？]{2,}'), '问号'),
+    ]
+
+    # 排除合法重复：省略号…… 破折号——
+    re_ellipsis = re.compile(r'……|\.\.\.|\.\.\.\.\.\.')
+    re_dash = re.compile(r'——|--')
+
+    ref_indices = {idx for idx, _, _ in ctx["references"]}
+
+    for pidx in ctx["body_paras"]:
+        text = paragraphs[pidx].text.strip()
+        if not text or pidx in ref_indices:
+            continue
+
+        # 先清除合法重复
+        cleaned = re_ellipsis.sub('##', text)
+        cleaned = re_dash.sub('##', cleaned)
+
+        for pattern, name in mixed_pairs:
+            matches = pattern.findall(cleaned)
+            if matches:
+                sample = text[:50] + ("..." if len(text) > 50 else "")
+                issues.append(_issue(
+                    pidx, f"段{pidx}",
+                    "连续重复标点",
+                    "标点不应连续重复",
+                    f"发现重复{name}「{matches[0]}」，段落: {sample}",
+                    "warning"
+                ))
+                break  # 每段只报一次
+
+    return issues
+
+
+# ---------- 37. Unpaired quotation marks ----------
+
+def _check_quotation_marks(doc, ctx):
+    """检查引号配对：中文引号""和''应成对出现。"""
+    issues = []
+    paragraphs = doc.paragraphs
+
+    quote_pairs = [
+        ('\u201c', '\u201d', '中文双引号""'),  # ""
+        ('\u2018', '\u2019', '中文单引号'''),  # ''
+        ('\u300a', '\u300b', '书名号《》'),      # 《》
+    ]
+
+    ref_indices = {idx for idx, _, _ in ctx["references"]}
+
+    for pidx in ctx["body_paras"]:
+        text = paragraphs[pidx].text.strip()
+        if not text or pidx in ref_indices:
+            continue
+
+        for left, right, name in quote_pairs:
+            lc = text.count(left)
+            rc = text.count(right)
+            if lc != rc:
+                sample = text[:50] + ("..." if len(text) > 50 else "")
+                issues.append(_issue(
+                    pidx, f"段{pidx}",
+                    f"{name}不配对",
+                    f"'{left}'与'{right}'数量应相等",
+                    f"'{left}'={lc}个, '{right}'={rc}个，段落: {sample}",
+                    "warning"
+                ))
+
+    return issues
+
+
 # ═══════════════════════════════════════════════════════════════
 # Main entry point
 # ═══════════════════════════════════════════════════════════════
@@ -2057,6 +2154,8 @@ def check_word(docx_path: str) -> dict:
         ("连续重复汉字", _check_duplicate_words),
         ("括号配对", _check_bracket_mismatch),
         ("公式源码残留", _check_formula_source_remnants),
+        ("连续重复标点", _check_duplicate_punctuation),
+        ("引号配对", _check_quotation_marks),
     ]
 
     for name, check_fn in checks:
