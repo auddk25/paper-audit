@@ -5,6 +5,7 @@ Checks:
   2. Figure references: "图X.Y" → does figure exist?
   3. Table references: "表X.Y" → does table exist?
   4. Equation references: "式(X.Y)" / "公式(X.Y)" → does equation exist?
+  5. Unreferenced: defined figures/tables/equations never cited in body text
 
 Key design: DEFINITION patterns (strict, positional) are separated from
 REFERENCE patterns (loose, any context) to avoid counting body-text
@@ -133,11 +134,12 @@ def _run_checks(doc, structure: dict) -> dict:
                     else:
                         results["sections"]["invalid"].append(entry)
 
-            # Figure references (skip definition lines themselves)
+            # Figure references (skip pure caption lines, keep body-text refs)
             for m in fig_ref.finditer(line_stripped):
-                # Skip if this line IS the definition (starts with 图X.Y)
                 if fig_def.match(line_stripped):
-                    continue
+                    has_ref_verb = re.search(r"[给出|所示|如|见|列出|对比|展示]", line_stripped)
+                    if not has_ref_verb:
+                        continue  # Pure caption, skip
                 ref_num = f"{m.group(1)}.{m.group(2)}"
                 entry = _ref_entry(ref_num, f"图{ref_num}", page_num, line_stripped)
                 if ref_num in existing_figures:
@@ -145,10 +147,14 @@ def _run_checks(doc, structure: dict) -> dict:
                 else:
                     results["figures"]["invalid"].append(entry)
 
-            # Table references (skip definition lines)
+            # Table references (skip pure caption lines, keep body-text refs)
             for m in tab_ref.finditer(line_stripped):
+                # Pure caption: starts with "表X.Y" + short title, no verbs
                 if tab_def.match(line_stripped):
-                    continue
+                    # If the line contains reference verbs, it's a body ref not a caption
+                    has_ref_verb = re.search(r"[给出|所示|如|见|列出|对比|展示]", line_stripped)
+                    if not has_ref_verb:
+                        continue  # Pure caption, skip
                 ref_num = f"{m.group(1)}.{m.group(2)}"
                 entry = _ref_entry(ref_num, f"表{ref_num}", page_num, line_stripped)
                 if ref_num in existing_tables:
@@ -173,6 +179,17 @@ def _run_checks(doc, structure: dict) -> dict:
         category["valid"] = _dedup(category["valid"])
         category["invalid"] = _dedup(category["invalid"])
 
+    # === Unreferenced check: defined but never cited ===
+    referenced_figures = {e["ref"] for e in results["figures"]["valid"]}
+    referenced_tables = {e["ref"] for e in results["tables"]["valid"]}
+    referenced_equations = {e["ref"] for e in results["equations"]["valid"]}
+
+    results["unreferenced"] = {
+        "figures": sorted(existing_figures - referenced_figures),
+        "tables": sorted(existing_tables - referenced_tables),
+        "equations": sorted(existing_equations - referenced_equations),
+    }
+
     # Summary
     results["summary"] = {
         "sections": {
@@ -194,6 +211,14 @@ def _run_checks(doc, structure: dict) -> dict:
     }
     total_invalid = sum(v["invalid"] for v in results["summary"].values())
     results["summary"]["total_invalid"] = total_invalid
+    results["summary"]["unreferenced"] = {
+        "figures": len(results["unreferenced"]["figures"]),
+        "tables": len(results["unreferenced"]["tables"]),
+        "equations": len(results["unreferenced"]["equations"]),
+    }
+    results["summary"]["total_unreferenced"] = sum(
+        results["summary"]["unreferenced"].values()
+    )
 
     # Definition counts for transparency
     results["definitions"] = {
