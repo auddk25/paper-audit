@@ -1952,6 +1952,58 @@ def _check_bracket_mismatch(doc, ctx):
     return issues
 
 
+# ---------- 35. Formula source code remnants ----------
+
+def _check_formula_source_remnants(doc, ctx):
+    """检查公式编辑器源码泄漏：$、\\frac、\\alpha 等 LaTeX/MathType 残留。
+
+    正常论文中不应出现这些符号。如果出现，说明公式没有正确渲染。
+    """
+    issues = []
+    paragraphs = doc.paragraphs
+
+    # LaTeX/MathType source code patterns
+    patterns = [
+        (re.compile(r'(?<!\w)\$[^$]+\$'), '$...$', 'LaTeX行内公式'),
+        (re.compile(r'\\(?:frac|sqrt|sum|prod|int|lim|inf|sup|max|min|log|ln|sin|cos|tan|exp)\b'),
+         '\\frac等', 'LaTeX命令'),
+        (re.compile(r'\\(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|Alpha|Beta|Gamma|Delta|Theta|Lambda|Pi|Sigma|Phi|Psi|Omega)\b'),
+         '\\alpha等', 'LaTeX希腊字母'),
+        (re.compile(r'\\(?:left|right|begin|end|text|mathrm|mathbf|mathit|mathcal|overline|underline|hat|bar|tilde|vec|dot)\b'),
+         '\\left等', 'LaTeX格式命令'),
+        (re.compile(r'\\(?:leq|geq|neq|approx|equiv|subset|supset|cup|cap|in|notin|forall|exists|nabla|partial|infty|cdot|times|div|pm|mp)\b'),
+         '\\leq等', 'LaTeX运算符'),
+        (re.compile(r'\^\{[^}]+\}|_\{[^}]+\}'), '^{} _{} ', 'LaTeX上下标'),
+    ]
+
+    # Collect reference para indices for exclusion
+    ref_indices = {idx for idx, _, _ in ctx["references"]}
+
+    for pidx in ctx["body_paras"]:
+        text = paragraphs[pidx].text.strip()
+        if not text or pidx in ref_indices:
+            continue
+        # Skip very short text
+        if len(text) < 5:
+            continue
+
+        for pattern, symbol, desc in patterns:
+            matches = pattern.findall(text)
+            if matches:
+                sample = text[:60] + ("..." if len(text) > 60 else "")
+                match_text = matches[0] if isinstance(matches[0], str) else str(matches[0])
+                issues.append(_issue(
+                    pidx, f"段{pidx}",
+                    "公式源码残留",
+                    "正文中不应出现公式编辑器源码",
+                    f"发现 {desc}「{match_text[:30]}」，段落: {sample}",
+                    "warning"
+                ))
+                break  # 每段只报一次
+
+    return issues
+
+
 # ═══════════════════════════════════════════════════════════════
 # Main entry point
 # ═══════════════════════════════════════════════════════════════
@@ -2004,6 +2056,7 @@ def check_word(docx_path: str) -> dict:
         ("图表题末尾标点", _check_caption_trailing_punct),
         ("连续重复汉字", _check_duplicate_words),
         ("括号配对", _check_bracket_mismatch),
+        ("公式源码残留", _check_formula_source_remnants),
     ]
 
     for name, check_fn in checks:
