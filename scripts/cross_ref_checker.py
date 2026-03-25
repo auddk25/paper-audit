@@ -59,15 +59,16 @@ def _run_checks(doc, structure: dict) -> dict:
     existing_tables = set()
     existing_equations = set()
 
+    # Position tracking for order checking: {ref_num: (page, y)}
+    fig_def_pos = {}   # 图定义位置
+    tab_def_pos = {}   # 表定义位置
+
     # === DEFINITION patterns (strict, positional) ===
-    # Figure/table definitions: must be at line start or standalone caption line
-    # e.g. "图3.2 系统架构图" or "表4.1 实验参数"
     fig_def = re.compile(r"^\s*图\s*(\d+)[.\s·．](\d+)")
     tab_def = re.compile(r"^\s*表\s*(\d+)[.\s·．](\d+)")
-    # Equation definitions: number at line end, e.g. "(2.1)" or "（2.1）" at right side
     eq_def = re.compile(r"[（(]\s*(\d+)\s*[.\-·．]\s*(\d+)\s*[）)]\s*$")
 
-    # First pass: collect DEFINITIONS only (line-by-line, positional matching)
+    # First pass: collect DEFINITIONS with positions
     for page_idx in range(len(doc)):
         page = doc[page_idx]
         blocks = page.get_text("dict")["blocks"]
@@ -79,18 +80,25 @@ def _run_checks(doc, structure: dict) -> dict:
                 text = "".join(s["text"] for s in line["spans"]).strip()
                 if not text:
                     continue
+                y_pos = line["bbox"][1]
 
-                # Figure definition: line starts with "图X.Y"
+                # Figure definition
                 m = fig_def.match(text)
                 if m:
-                    existing_figures.add(f"{m.group(1)}.{m.group(2)}")
+                    ref_num = f"{m.group(1)}.{m.group(2)}"
+                    existing_figures.add(ref_num)
+                    if ref_num not in fig_def_pos:
+                        fig_def_pos[ref_num] = (page_idx + 1, y_pos)
 
-                # Table definition: line starts with "表X.Y"
+                # Table definition
                 m = tab_def.match(text)
                 if m:
-                    existing_tables.add(f"{m.group(1)}.{m.group(2)}")
+                    ref_num = f"{m.group(1)}.{m.group(2)}"
+                    existing_tables.add(ref_num)
+                    if ref_num not in tab_def_pos:
+                        tab_def_pos[ref_num] = (page_idx + 1, y_pos)
 
-                # Equation definition: "(X.Y)" at line end
+                # Equation definition
                 m = eq_def.search(text)
                 if m:
                     existing_equations.add(f"{m.group(1)}.{m.group(2)}")
@@ -111,6 +119,10 @@ def _run_checks(doc, structure: dict) -> dict:
         "tables": {"valid": [], "invalid": []},
         "equations": {"valid": [], "invalid": []},
     }
+
+    # Track first reference position for order checking
+    fig_first_ref = {}  # {ref_num: (page, context)}
+    tab_first_ref = {}
 
     # Second pass: find all REFERENCES and check against definitions
     for page_idx in range(len(doc)):
@@ -146,12 +158,13 @@ def _run_checks(doc, structure: dict) -> dict:
                     results["figures"]["valid"].append(entry)
                 else:
                     results["figures"]["invalid"].append(entry)
+                # Record first reference position (body text only)
+                if ref_num not in fig_first_ref and not fig_def.match(line_stripped):
+                    fig_first_ref[ref_num] = (page_num, line_stripped[:50])
 
             # Table references (skip pure caption lines, keep body-text refs)
             for m in tab_ref.finditer(line_stripped):
-                # Pure caption: starts with "表X.Y" + short title, no verbs
                 if tab_def.match(line_stripped):
-                    # If the line contains reference verbs, it's a body ref not a caption
                     has_ref_verb = re.search(r"[给出|所示|如|见|列出|对比|展示]", line_stripped)
                     if not has_ref_verb:
                         continue  # Pure caption, skip
@@ -161,6 +174,9 @@ def _run_checks(doc, structure: dict) -> dict:
                     results["tables"]["valid"].append(entry)
                 else:
                     results["tables"]["invalid"].append(entry)
+                # Record first reference position
+                if ref_num not in tab_first_ref and not tab_def.match(line_stripped):
+                    tab_first_ref[ref_num] = (page_num, line_stripped[:50])
 
             # Equation references (skip definition lines)
             for m in eq_ref.finditer(line_stripped):
@@ -189,6 +205,46 @@ def _run_checks(doc, structure: dict) -> dict:
         "tables": sorted(existing_tables - referenced_tables),
         "equations": sorted(existing_equations - referenced_equations),
     }
+
+    # === Order check: 先文后图/表 ===
+    # Rule: first body-text reference (如图X.Y所示) must appear on the
+    # same page or BEFORE the definition (图X.Y 标题行).
+    # Violation: definition on page N, first reference on page N+1 or later.
+    order_violations = []
+
+    for ref_num in existing_figures:
+        if ref_num in fig_first_ref and ref_num in fig_def_pos:
+            ref_page = fig_first_ref[ref_num][0]
+            def_page = fig_def_pos[ref_num][0]
+            if ref_page > def_page:
+                order_violations.append({
+                    "type": "图",
+                    "ref": ref_num,
+                    "label": f"图{ref_num}",
+                    "def_page": def_page,
+                    "ref_page": ref_page,
+                    "ref_context": fig_first_ref[ref_num][1],
+                    "issue": f"图{ref_num}定义在p{def_page}，首次引用在p{ref_page}（违反先文后图）",
+                })
+
+    for ref_num in existing_tables:
+        if ref_num in tab_first_ref and ref_num in tab_def_pos:
+            ref_page = tab_first_ref[ref_num][0]
+            def_page = tab_def_pos[ref_num][0]
+            # For tables: caption is ABOVE the table, so reference should
+            # come before or on same page as caption
+            if ref_page > def_page:
+                order_violations.append({
+                    "type": "表",
+                    "ref": ref_num,
+                    "label": f"表{ref_num}",
+                    "def_page": def_page,
+                    "ref_page": ref_page,
+                    "ref_context": tab_first_ref[ref_num][1],
+                    "issue": f"表{ref_num}定义在p{def_page}，首次引用在p{ref_page}（违反先文后表）",
+                })
+
+    results["order_violations"] = order_violations
 
     # Summary
     results["summary"] = {
@@ -219,6 +275,7 @@ def _run_checks(doc, structure: dict) -> dict:
     results["summary"]["total_unreferenced"] = sum(
         results["summary"]["unreferenced"].values()
     )
+    results["summary"]["order_violations"] = len(order_violations)
 
     # Definition counts for transparency
     results["definitions"] = {
