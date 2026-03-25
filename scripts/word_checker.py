@@ -1319,6 +1319,41 @@ def _check_equation_ref_consistency(doc, ctx):
     return issues
 
 
+# ---------- 17b. Equation reference bracket check ----------
+
+def _check_equation_ref_brackets(doc, ctx):
+    """检查公式引用中的括号必须是半角英文括号 () 而非全角中文括号（）。
+
+    正确: 如式(4.7)所示、由式(4.7)至式(4.9)可知
+    错误: 如式（4.7）所示、由式（4.7）至式（4.9）可知
+    """
+    issues = []
+    paragraphs = doc.paragraphs
+
+    # 检测全角括号包裹公式编号: 式（X.Y）或 公式（X.Y）
+    re_fullwidth = re.compile(r'(?:式|公式)\s*（\s*\d+\s*[.\-·．]\s*\d+\s*）')
+
+    ref_indices = {idx for idx, _, _ in ctx["references"]}
+
+    for pidx in ctx["body_paras"]:
+        text = paragraphs[pidx].text.strip()
+        if not text or pidx in ref_indices:
+            continue
+
+        matches = re_fullwidth.findall(text)
+        if matches:
+            sample = text[:60] + ("..." if len(text) > 60 else "")
+            issues.append(_issue(
+                pidx, f"段{pidx}",
+                "公式引用括号格式",
+                "公式编号应使用半角括号 式(X.Y)",
+                f"使用了全角括号「{matches[0]}」，应改为半角 → {matches[0].replace('（','(').replace('）',')')}，段落: {sample}",
+                "warning"
+            ))
+
+    return issues
+
+
 # ---------- 18. References ----------
 
 def _check_references(doc, ctx):
@@ -2136,6 +2171,7 @@ def check_word(docx_path: str) -> dict:
         ("中英文表题", _check_bilingual_table_captions),
         ("公式编号", _check_equation_numbering),
         ("公式引用风格", _check_equation_ref_consistency),
+        ("公式引用括号", _check_equation_ref_brackets),
         ("参考文献格式", _check_references),
         ("编号分隔符", _check_section_numbering_separator),
         ("章编号格式", _check_chapter_number_arabic),
